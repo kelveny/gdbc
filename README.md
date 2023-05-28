@@ -10,9 +10,17 @@ The goal of `gdbc` is not to provide yet another [ORM](https://en.wikipedia.org/
 
 Please note, almost all `gdbc` functions take `context.Context` as function input parameters, for contexts that are cancellable, be aware of that it may impact query results. You might want to use isolated context for database operations. We made this trade-off for simplifying `gdbc` interface.
 
-Transaction support is implicit. The caller only needs to start the transaction flow with a static function, any operations carried out within the anonymous function are safe in case of a system crash. If the function returns successfully, the transaction will be committed, but if it returns an error or `panic`, the transaction will be rolled back.
+Transaction support is implicit. The caller only needs to start the transaction flow with a static function, any operations carried out within the anonymous function are safe in case of a system crash. If the function executes without errors, the transaction will be finalized and committed. However, if an error or `panic` occurs during the function execution, the transaction will be reverted or rolled back.
 
 `gdbc` is also equipped with its own `go:generate` tooling, `gdbc` entity enhancer can generate compile-time type-safe meta types to help developer write queries, it can also generate corresponding enhanced entity type for partial updates.
+
+You are not restricted to utlize generated compile-time type-safe meta types with `gdbc` built-in database accessors. You can employ them in any context where compile-time type-safe mapping is applicable. For instance, you can combine them with other Go database accessing libraries.
+
+## Install
+
+```bash
+go install github.com/kelveny/gdbc
+```
 
 ## Usage examples
 

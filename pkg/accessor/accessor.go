@@ -1,7 +1,7 @@
 // Accessor feature summary
 //
 // 1. public accessor methods
-//     Get(ctx context.Context, dest any, query string, args ...any) error
+//  Get(ctx context.Context, dest any, query string, args ...any) error
 //  Select(ctx context.Context, dest any, query string, args ...any) error
 //  Exec(ctx context.Context, query string, args ...any) (result sql.Result, outErr error)
 //
@@ -153,6 +153,16 @@ func (a *Accessor) Exec(ctx context.Context, query string, args ...any) (result 
 	return nil, errors.New("invalid accessor backend")
 }
 
+//
+// Insert a database row based on entity properties.
+//
+// Create allows caller to specify hint about its primary key column(s). Only when corresponding
+// entity fields have non-zero value(s), will the zon-zero value(s) be used, otherwise, related
+// privary column(s) will be inserted with database supplied value(s).
+//
+// Zero value of ID fields indicates to insert the row using database's auto-increment value,
+// returning auto-increment ID value will be backfilled into the entity object
+//
 // Usage example
 /*
    // create
@@ -169,13 +179,26 @@ func (a *Accessor) Exec(ctx context.Context, query string, args ...any) (result 
    err := accessor.Create(context.Background(), &city, "city")
 */
 func (a *Accessor) Create(ctx context.Context, entity any, tbl string, idFields ...string) error {
+	idColumns := []string{}
+	colValueMap := map[string]reflect.Value{}
+	var err error
+
 	if len(idFields) == 0 {
 		idFields = []string{"Id"}
-	}
 
-	idColumns, colValueMap, err := a.getMapping(entity, idFields...)
-	if err != nil {
-		return err
+		// check if default primary mapping exists
+		idColumns, colValueMap, err = a.getMapping(entity, idFields...)
+		if err != nil {
+			idColumns, colValueMap, err = a.getMapping(entity)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		idColumns, colValueMap, err = a.getMapping(entity, idFields...)
+		if err != nil {
+			return err
+		}
 	}
 
 	return a.SqlizerGet(ctx, entity, func(builder squirrel.StatementBuilderType) Sqlizer {
@@ -346,6 +369,7 @@ func (a *Accessor) getMapping(entity any, idFields ...string) (idColumns []strin
 		mapper = tx.Mapper
 	}
 
+	// column (tag name) -> reflect.Value mapping
 	colValueMap = mapper.FieldMap(reflect.ValueOf(entity))
 	return
 }

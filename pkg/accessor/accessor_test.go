@@ -448,7 +448,8 @@ type Person struct {
 	AddedAt   time.Time `db:"added_at"`
 }
 
-// this type will be generated with go:generate later
+// this type can be generated with go:generate tooling. write the original
+// here for self-completeness and use as a template for the tool.
 type PersonWithUpdateTracker struct {
 	Person
 	trackMap map[string]bool
@@ -522,7 +523,7 @@ func (s *AccessorTestSuite) TestUpdate() {
 	s.setupTestDatabase()
 }
 
-func (s *AccessorTestSuite) TestCreate() {
+func (s *AccessorTestSuite) TestCreateWithImpicitIdMapping() {
 	assert := require.New(s.T())
 
 	// create
@@ -539,6 +540,8 @@ func (s *AccessorTestSuite) TestCreate() {
 	err := accessor.Create(context.Background(), &city, "city")
 
 	assert.True(err == nil)
+
+	// assert on auto-increment of ID property
 	assert.True(city.Id != 0)
 
 	// read
@@ -557,6 +560,37 @@ func (s *AccessorTestSuite) TestCreate() {
 
 	// delete
 	result, err := accessor.Delete(context.Background(), &city2, "city")
+	assert.True(err == nil)
+	affected, err := result.RowsAffected()
+	assert.True(err == nil)
+	assert.True(affected == 1)
+}
+
+func (s *AccessorTestSuite) TestCreateWithoutIdMapping() {
+	assert := require.New(s.T())
+
+	// create
+	p := Person{
+		FirstName: "foo",
+		LastName:  "bar",
+		Email:     "foo.bar@test",
+	}
+	accessor := New(s.Db)
+	err := accessor.Create(context.Background(), &p, "person")
+
+	assert.True(err == nil)
+
+	// read
+	p2 := Person{}
+
+	p2.FirstName = "foo"
+	p2.LastName = "bar"
+	err = accessor.Read(context.Background(), &p2, "person", "FirstName", "LastName")
+	assert.True(err == nil)
+	assert.True(p2.Email == "foo.bar@test")
+
+	// delete
+	result, err := accessor.Delete(context.Background(), &p2, "person", "FirstName", "LastName")
 	assert.True(err == nil)
 	affected, err := result.RowsAffected()
 	assert.True(err == nil)
