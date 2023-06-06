@@ -163,6 +163,11 @@ func (a *Accessor) Exec(ctx context.Context, query string, args ...any) (result 
 // Zero value of ID fields indicates to insert the row using database's auto-increment value,
 // returning auto-increment ID value will be backfilled into the entity object
 //
+// If no idFieds is given, Create will try "Id" -> "id" mapping for primary key,
+// if "Id" -> "id" mapping does not exist, Create does not perform special handling of primary
+// key column(s) that may have database auto-increment enabled.
+//
+//
 // Usage example
 /*
    // create
@@ -201,6 +206,7 @@ func (a *Accessor) Create(ctx context.Context, entity any, tbl string, idFields 
 		}
 	}
 
+	colValueMap = removeNestedCols(colValueMap)
 	return a.SqlizerGet(ctx, entity, func(builder squirrel.StatementBuilderType) Sqlizer {
 		b := builder.Insert(tbl)
 
@@ -245,6 +251,7 @@ func (a *Accessor) Read(ctx context.Context, entity any, tbl string, idFields ..
 		return errors.New("missing ID columns")
 	}
 
+	colValueMap = removeNestedCols(colValueMap)
 	return a.SqlizerGet(ctx, entity, func(builder squirrel.StatementBuilderType) Sqlizer {
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
@@ -287,6 +294,7 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
 		return nil, errors.New("missing ID columns")
 	}
 
+	colValueMap = removeNestedCols(colValueMap)
 	return a.SqlizerExec(ctx, func(builder squirrel.StatementBuilderType) Sqlizer {
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
@@ -340,6 +348,8 @@ func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields 
 	if err != nil {
 		return nil, errors.New("missing ID columns")
 	}
+
+	colValueMap = removeNestedCols(colValueMap)
 	return a.SqlizerExec(ctx, func(builder squirrel.StatementBuilderType) Sqlizer {
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
@@ -743,4 +753,19 @@ func stringInSlice(str string, slice []string) bool {
 		}
 	}
 	return false
+}
+
+func removeNestedCols(m map[string]reflect.Value) map[string]reflect.Value {
+	if m == nil {
+		return nil
+	}
+
+	ret := make(map[string]reflect.Value)
+	for k, v := range m {
+		if !strings.Contains(k, ".") {
+			ret[k] = v
+		}
+	}
+
+	return ret
 }

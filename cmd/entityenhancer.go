@@ -138,7 +138,6 @@ func (c *Config) GetEntityOption(name string) *Option {
 
 func scanPredicate(fi os.FileInfo) bool {
 	if strings.HasSuffix(fi.Name(), ".go") &&
-		!strings.HasSuffix(fi.Name(), "_test.go") &&
 		!strings.HasSuffix(fi.Name(), "_enhanced.go") {
 
 		return true
