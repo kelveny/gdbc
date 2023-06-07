@@ -51,11 +51,11 @@ type {{ .Entity }}TableColumns struct {
     {{- end }}
 }
 
-func (_ *{{ .Entity }}) TableName() string {
+func (e *{{ .Entity }}) TableName() string {
     return "{{ .Table }}"
 }
 
-func (_ *{{ .Entity }}) EntityFields() *{{ .Entity }}EntityFields {
+func (e *{{ .Entity }}) EntityFields() *{{ .Entity }}EntityFields {
     return &{{ .Entity }}EntityFields {
         {{- range $index, $f := .Fields }}
         {{ $f.Name }}: "{{ $f.Name }}",
@@ -63,7 +63,7 @@ func (_ *{{ .Entity }}) EntityFields() *{{ .Entity }}EntityFields {
     }
 }
 
-func (_ *{{ .Entity }}) TableColumns() *{{ .Entity }}TableColumns {
+func (e *{{ .Entity }}) TableColumns() *{{ .Entity }}TableColumns {
     return &{{ .Entity }}TableColumns {
         {{- range $index, $f := .Fields }}
         {{ $f.Name }}: "{{ $f.Column }}",
@@ -190,11 +190,13 @@ func generateWithConfig(config *Config) func(string, os.FileInfo) {
 			return
 		}
 
-		scanToEnhanceEntities(pkgDir, fset, file, config)
+		logger.Log(logger.PROMPT, "Scan %s... \n", fi.Name())
+		scanToEnhanceEntities(pkgDir, fi, fset, file, config)
+		logger.Log(logger.PROMPT, "Done entity enhancement for %s \n", fi.Name())
 	}
 }
 
-func scanToEnhanceEntities(pkgDir string, fset *token.FileSet, file *ast.File, config *Config) {
+func scanToEnhanceEntities(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast.File, config *Config) {
 	for _, d := range file.Decls {
 		if gd, ok := d.(*ast.GenDecl); ok {
 			for _, spec := range gd.Specs {
@@ -203,7 +205,7 @@ func scanToEnhanceEntities(pkgDir string, fset *token.FileSet, file *ast.File, c
 						option := config.GetEntityOption(tspec.Name.Name)
 
 						if option != nil {
-							enhanceEntity(pkgDir, fset, file, entity, option)
+							enhanceEntity(pkgDir, fi, fset, file, entity, option)
 						}
 					}
 				}
@@ -296,7 +298,7 @@ func generate(
 	return t.Execute(writer, binding)
 }
 
-func enhanceEntity(pkgDir string, fset *token.FileSet, file *ast.File, entity *ast.StructType, option *Option) {
+func enhanceEntity(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast.File, entity *ast.StructType, option *Option) {
 	fields := getEntityFields(fset, entity)
 	if len(fields) > 0 {
 		var outputFileName string
@@ -313,7 +315,11 @@ func enhanceEntity(pkgDir string, fset *token.FileSet, file *ast.File, entity *a
 		}
 
 		// second pass to generate output file with imports cleaned and formatted
-		outputFileName = fmt.Sprintf("%s_enhanced.go", strings.ToLower(option.Entity))
+		if strings.HasSuffix(fi.Name(), "_test.go") {
+			outputFileName = fmt.Sprintf("%s_enhanced_test.go", strings.ToLower(option.Entity))
+		} else {
+			outputFileName = fmt.Sprintf("%s_enhanced.go", strings.ToLower(option.Entity))
+		}
 		output, err := os.OpenFile(
 			filepath.Join(pkgDir, outputFileName),
 			os.O_CREATE|os.O_RDWR,

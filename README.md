@@ -289,7 +289,6 @@ func (e *PersonWithUpdateTracker) SetEmail(val string) *PersonWithUpdateTracker 
            Person{}.TableColumns().LastName: "test",
        })
    })
-
 ```
 
 ### 15. Implicit crash-safe transaction

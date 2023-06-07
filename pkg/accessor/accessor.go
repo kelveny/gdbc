@@ -54,6 +54,7 @@ package accessor
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -217,11 +218,11 @@ func (a *Accessor) Create(ctx context.Context, entity any, tbl string, idFields 
 			if stringInSlice(k, idColumns) {
 				if !v.IsZero() {
 					cols = append(cols, k)
-					vals = append(vals, v.Interface())
+					vals = append(vals, getDriverValue(v.Interface()))
 				}
 			} else {
 				cols = append(cols, k)
-				vals = append(vals, v.Interface())
+				vals = append(vals, getDriverValue(v.Interface()))
 			}
 		}
 
@@ -256,7 +257,7 @@ func (a *Accessor) Read(ctx context.Context, entity any, tbl string, idFields ..
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
 			if stringInSlice(k, idColumns) {
-				eq[k] = v.Interface()
+				eq[k] = getDriverValue(v.Interface())
 			}
 		}
 		return builder.Select("*").From(tbl).Where(eq)
@@ -299,7 +300,7 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
 			if stringInSlice(k, idColumns) {
-				eq[k] = v.Interface()
+				eq[k] = getDriverValue(v.Interface())
 			}
 		}
 
@@ -309,13 +310,13 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
 
 			for k, v := range colValueMap {
 				if !stringInSlice(k, idColumns) && stringInSlice(k, colsChanged) {
-					q = q.Set(k, v.Interface())
+					q = q.Set(k, getDriverValue(v.Interface()))
 				}
 			}
 		} else {
 			for k, v := range colValueMap {
 				if !stringInSlice(k, idColumns) {
-					q = q.Set(k, v.Interface())
+					q = q.Set(k, getDriverValue(v.Interface()))
 				}
 			}
 		}
@@ -354,7 +355,7 @@ func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields 
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
 			if stringInSlice(k, idColumns) {
-				eq[k] = v.Interface()
+				eq[k] = getDriverValue(v.Interface())
 			}
 		}
 		return builder.Delete(tbl).Where(eq)
@@ -768,4 +769,21 @@ func removeNestedCols(m map[string]reflect.Value) map[string]reflect.Value {
 	}
 
 	return ret
+}
+
+func getDriverValue(v any) any {
+	if v != nil {
+		if valuer, ok := v.(driver.Valuer); ok {
+			val, err := valuer.Value()
+			if err == nil {
+				// deal with special nil value
+				if val == "<nil>" {
+					return nil
+				}
+				return val
+			}
+		}
+	}
+
+	return v
 }

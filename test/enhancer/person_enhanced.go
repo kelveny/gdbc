@@ -16,11 +16,11 @@ type PersonTableColumns struct {
 	Email     string
 }
 
-func (_ *Person) TableName() string {
+func (e *Person) TableName() string {
 	return "person"
 }
 
-func (_ *Person) EntityFields() *PersonEntityFields {
+func (e *Person) EntityFields() *PersonEntityFields {
 	return &PersonEntityFields{
 		FirstName: "FirstName",
 		LastName:  "LastName",
@@ -28,7 +28,7 @@ func (_ *Person) EntityFields() *PersonEntityFields {
 	}
 }
 
-func (_ *Person) TableColumns() *PersonTableColumns {
+func (e *Person) TableColumns() *PersonTableColumns {
 	return &PersonTableColumns{
 		FirstName: "first_name",
 		LastName:  "last_name",
