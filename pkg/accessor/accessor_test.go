@@ -429,6 +429,7 @@ func (s *AccessorTestSuite) TestDelete() {
 	affected, err := result.RowsAffected()
 	assert.True(err == nil)
 	assert.True(affected == 1)
+	assert.True(p.Email == "")
 
 	p.FirstName = "bar"
 	result, err = accessor.Delete(context.Background(), &p, "person", "FirstName", "LastName")
@@ -436,6 +437,7 @@ func (s *AccessorTestSuite) TestDelete() {
 	affected, err = result.RowsAffected()
 	assert.True(err == nil)
 	assert.True(affected == 1)
+	assert.True(p.Email == "bar@test")
 
 	// restore
 	s.setupTestDatabase()

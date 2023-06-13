@@ -56,11 +56,11 @@ type PersonTableColumns struct {
     Email     string
 }
 
-func (_ *Person) TableName() string {
+func (e *Person) TableName() string {
     return "person"
 }
 
-func (_ *Person) EntityFields() *PersonEntityFields {
+func (e *Person) EntityFields() *PersonEntityFields {
     return &PersonEntityFields{
         FirstName: "FirstName",
         LastName:  "LastName",
@@ -68,7 +68,7 @@ func (_ *Person) EntityFields() *PersonEntityFields {
     }
 }
 
-func (_ *Person) TableColumns() *PersonTableColumns {
+func (e *Person) TableColumns() *PersonTableColumns {
     return &PersonTableColumns{
         FirstName: "first_name",
         LastName:  "last_name",
@@ -186,6 +186,8 @@ func (e *PersonWithUpdateTracker) SetEmail(val string) *PersonWithUpdateTracker 
     }
     result, err := accessor.Delete(context.Background(), &pp, pp.TableName(), pp.EntityFields().FirstName)
 ```
+
+Note, you can use either a value type or a pointer type for `entity` parameter of `Delete` method, when it is a pointer type as above example, `Delete` method also returns the read entity.
 
 ### 7. Get a single entity by direct SQL query and ad-hoc entity type
 
@@ -308,3 +310,63 @@ func (e *PersonWithUpdateTracker) SetEmail(val string) *PersonWithUpdateTracker 
        return nil
    })
 ```
+
+## Notes about entity CRUD
+
+Although [sqlx](https://github.com/jmoiron/sqlx) supports complex (nested) mapping operations, entity CRUD methods(`Create`, `Read`, `Update`, `Delete`) utilize one-level only mapping operations. This is a design choice to make entity level CRUD operations be generic. For entity types that have complex fields, you will need to employ [sql.Scanner](https://pkg.go.dev/database/sql#Scanner) and [sql.Driver](https://pkg.go.dev/database/sql/driver#Value) facilities to map between complex field types and driver supported value types. Following example illustrates such a mapping for `NULL-able` primitive value types in [Postgres](https://www.postgresql.org/).
+
+```go
+import (
+    "database/sql"
+    "database/sql/driver"
+    "errors"
+
+    "github.com/jackc/pgtype"
+)
+
+type NullPrimitive[T any] struct {
+    TypeValue T
+    Valid     bool
+}
+
+// Scan implements the sql.Scanner interface.
+func (e *NullPrimitive[T]) Scan(value interface{}) error {
+    if e == nil || value == nil {
+        return nil
+    }
+
+    ci := pgtype.NewConnInfo()
+    if dt, ok := ci.DataTypeForValue(e.TypeValue); ok {
+        err := dt.Value.(sql.Scanner).Scan(value)
+        if err == nil {
+            err = dt.Value.AssignTo(&e.TypeValue)
+        }
+        if err == nil {
+            e.Valid = true
+        }
+        return err
+    } else {
+        return errors.New("unregistered primitive value type")
+    }
+}
+
+// Value implements the driver.Valuer interface.
+func (e NullPrimitive[T]) Value() (driver.Value, error) {
+    if !e.Valid {
+        return nil, nil
+    }
+
+    ci := pgtype.NewConnInfo()
+
+    if dt, ok := ci.DataTypeForValue(e.TypeValue); ok {
+        v := pgtype.NewValue(dt.Value)
+
+        v.Set(e.TypeValue)
+        return v, nil
+    } else {
+        return nil, errors.New("unregistered primitive value type")
+    }
+}
+```
+
+For complex field types with nested structure, Go [json](https://pkg.go.dev/encoding/json) marshaler can be your friend to bridge basic driver supported types and field types under [sql.Scanner](https://pkg.go.dev/database/sql#Scanner)/[sql.Driver](https://pkg.go.dev/database/sql/driver#Value) framework.

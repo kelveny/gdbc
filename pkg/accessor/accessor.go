@@ -341,6 +341,10 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
    result, err := accessor.Delete(context.Background(), p, "person", "FirstName", "LastName")
 */
 func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields ...string) (sql.Result, error) {
+	if reflect.TypeOf(entity).Kind() == reflect.Ptr {
+		_ = a.Read(ctx, entity, tbl, idFields...)
+	}
+
 	if len(idFields) == 0 {
 		idFields = []string{"Id"}
 	}
