@@ -1,7 +1,5 @@
-//
 // CODE GENERATED AUTOMATICALLY WITH github.com/kelveny/gdbc entity enhancer
 // THIS FILE SHOULD NOT BE EDITED BY HAND
-//
 package enhancer
 
 type PersonEntityFields struct {

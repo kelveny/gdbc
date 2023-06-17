@@ -38,10 +38,8 @@ type Person struct {
 It has `go generate` generated code as:
 
 ```go
-//
 // CODE GENERATED AUTOMATICALLY WITH github.com/kelveny/gdbc entity enhancer
 // THIS FILE SHOULD NOT BE EDITED BY HAND
-//
 package enhancer
 
 type PersonEntityFields struct {
@@ -313,7 +311,7 @@ Note, you can use either a value type or a pointer type for `entity` parameter o
 
 ## Notes about entity CRUD
 
-Although [sqlx](https://github.com/jmoiron/sqlx) supports complex (nested) mapping operations, entity CRUD methods(`Create`, `Read`, `Update`, `Delete`) utilize one-level only mapping operations. This is a design choice to make entity level CRUD operations be generic. For entity types that have complex fields, you will need to employ [sql.Scanner](https://pkg.go.dev/database/sql#Scanner) and [sql.Driver](https://pkg.go.dev/database/sql/driver#Value) facilities to map between complex field types and driver supported value types. Following example illustrates such a mapping for `NULL-able` primitive value types in [Postgres](https://www.postgresql.org/).
+Although [sqlx](https://github.com/jmoiron/sqlx) supports complex (nested) mapping operations, entity CRUD methods(`Create`, `Read`, `Update`, `Delete`) utilize one-level only mapping operations. This is a design choice to make entity level CRUD operations be generic. For entity types that have complex fields, you will need to employ [sql.Scanner](https://pkg.go.dev/database/sql#Scanner) and [driver.Valur](https://cs.opensource.google/go/go/+/refs/tags/go1.20.5:src/database/sql/driver/types.go;l=39) facilities to map between complex field types and driver supported value types. Following example illustrates such a mapping for `NULL-able` primitive value types in [Postgres](https://www.postgresql.org/).
 
 ```go
 import (
@@ -361,7 +359,11 @@ func (e NullPrimitive[T]) Value() (driver.Value, error) {
     if dt, ok := ci.DataTypeForValue(e.TypeValue); ok {
         v := pgtype.NewValue(dt.Value)
 
-        v.Set(e.TypeValue)
+        err := v.Set(e.TypeValue)
+        if err != nil {
+            return nil, err
+        }
+
         return v, nil
     } else {
         return nil, errors.New("unregistered primitive value type")
@@ -369,4 +371,4 @@ func (e NullPrimitive[T]) Value() (driver.Value, error) {
 }
 ```
 
-For complex field types with nested structure, Go [json](https://pkg.go.dev/encoding/json) marshaler can be your friend to bridge basic driver supported types and field types under [sql.Scanner](https://pkg.go.dev/database/sql#Scanner)/[sql.Driver](https://pkg.go.dev/database/sql/driver#Value) framework.
+For complex field types with nested structure, Go [json](https://pkg.go.dev/encoding/json) marshaler can be your friend to bridge basic driver supported types and complex field types under [sql.Scanner](https://pkg.go.dev/database/sql#Scanner)/[driver.Valur](https://cs.opensource.google/go/go/+/refs/tags/go1.20.5:src/database/sql/driver/types.go;l=39) framework.

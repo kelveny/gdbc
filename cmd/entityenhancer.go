@@ -30,11 +30,8 @@ func GetSemverInfo() string {
 /////////////////////////////////////////////////////////////////////////////
 
 const (
-	header = `
-//
-// CODE GENERATED AUTOMATICALLY WITH github.com/kelveny/gdbc entity enhancer
+	header = `// CODE GENERATED AUTOMATICALLY WITH github.com/kelveny/gdbc entity enhancer
 // THIS FILE SHOULD NOT BE EDITED BY HAND
-//
 package %s
 
 `
