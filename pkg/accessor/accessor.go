@@ -63,6 +63,8 @@ import (
 	"github.com/Masterminds/squirrel"
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
+
+	cpy "github.com/barkimedes/go-deepcopy"
 )
 
 type Sqlizer interface {
@@ -71,6 +73,79 @@ type Sqlizer interface {
 
 type UpdateTracker interface {
 	ColumnsChanged() []string
+}
+
+type EntityMappingSchema struct {
+	TableName string
+
+	// field name -> column name
+	Columns map[string]string
+
+	// embedded mappings
+	BaseMappings []*EntityMappingSchema
+
+	Entity     any
+	EntityType reflect.Type
+}
+
+func (m *EntityMappingSchema) Schemas() []*EntityMappingSchema {
+	var schemas []*EntityMappingSchema
+
+	for _, mm := range m.BaseMappings {
+		schemas = append(schemas, mm.Schemas()...)
+	}
+
+	return append(schemas, m)
+}
+
+func (m *EntityMappingSchema) Tables() []string {
+	var tables []string
+
+	for _, mm := range m.BaseMappings {
+		tables = append(tables, mm.Tables()...)
+	}
+	return append(tables, m.TableName)
+}
+
+func (m *EntityMappingSchema) GetColumnSelectString() string {
+	var builder strings.Builder
+	for i, t := range m.Tables() {
+		if i == 0 {
+			builder.WriteString(t + ".*")
+		} else {
+			builder.WriteString(", " + t + ".*")
+		}
+	}
+
+	return builder.String()
+}
+
+func (m *EntityMappingSchema) GetTableJoinString(idColumns ...string) string {
+	tables := m.Tables()
+
+	var builder strings.Builder
+
+	for i := 0; i < len(tables)-1; i++ {
+		if i > 0 {
+			builder.WriteString(" JOIN ")
+		}
+		builder.WriteString(tables[i+1] + " ON ")
+		builder.WriteString(getJoinOnString(tables[i], tables[i+1], idColumns...))
+	}
+
+	return builder.String()
+}
+
+func getJoinOnString(table1, table2 string, idColumns ...string) string {
+	var builder strings.Builder
+
+	for i, id := range idColumns {
+		builder.WriteString(fmt.Sprintf("%s.%s=%s.%s", table1, id, table2, id))
+		if i < len(idColumns)-1 {
+			builder.WriteString(" AND ")
+		}
+	}
+	return builder.String()
 }
 
 type Accessor struct {
@@ -185,9 +260,29 @@ func (a *Accessor) Exec(ctx context.Context, query string, args ...any) (result 
    err := accessor.Create(context.Background(), &city, "city")
 */
 func (a *Accessor) Create(ctx context.Context, entity any, tbl string, idFields ...string) error {
+	s, err := EntitySchema(entity, reflect.TypeOf(entity), tbl)
+	if err != nil {
+		return err
+	}
+
+	if len(s.BaseMappings) > 0 {
+		return a.createComposite(ctx, s, idFields...)
+	}
+
+	return a.create(ctx, entity, s, nil, tbl, idFields...)
+}
+
+func (a *Accessor) create(
+	ctx context.Context,
+	entity any, s *EntityMappingSchema,
+	baseColValueMap map[string]reflect.Value,
+	tbl string,
+	idFields ...string,
+) error {
+	var err error
+
 	idColumns := []string{}
 	colValueMap := map[string]reflect.Value{}
-	var err error
 
 	if len(idFields) == 0 {
 		idFields = []string{"Id"}
@@ -195,6 +290,7 @@ func (a *Accessor) Create(ctx context.Context, entity any, tbl string, idFields 
 		// check if default primary mapping exists
 		idColumns, colValueMap, err = a.getMapping(entity, idFields...)
 		if err != nil {
+			// default id column does not exist, continue insertion without it
 			idColumns, colValueMap, err = a.getMapping(entity)
 			if err != nil {
 				return err
@@ -208,26 +304,97 @@ func (a *Accessor) Create(ctx context.Context, entity any, tbl string, idFields 
 	}
 
 	colValueMap = removeNestedCols(colValueMap)
+	if len(baseColValueMap) == 0 {
+		baseColValueMap = colValueMap
+	}
+
+	colLookup := map[string]string{}
+	for field, col := range s.Columns {
+		colLookup[col] = field
+	}
+
 	return a.SqlizerGet(ctx, entity, func(builder squirrel.StatementBuilderType) Sqlizer {
 		b := builder.Insert(tbl)
-
-		cols := []string{}
-		vals := []any{}
-
-		for k, v := range colValueMap {
-			if stringInSlice(k, idColumns) {
-				if !v.IsZero() {
-					cols = append(cols, k)
-					vals = append(vals, getDriverValue(v.Interface()))
-				}
-			} else {
-				cols = append(cols, k)
-				vals = append(vals, getDriverValue(v.Interface()))
-			}
-		}
-
+		cols, vals := buildCreateMapping(idColumns, colLookup, baseColValueMap, colValueMap)
 		return b.Columns(cols...).Values(vals...).Suffix("RETURNING *")
 	})
+}
+
+func buildCreateMapping(
+	idColumns []string,
+	colFieldLookup map[string]string,
+	baseColValueMap map[string]reflect.Value,
+	colValueMap map[string]reflect.Value,
+) ([]string, []any) {
+	cols := []string{}
+	vals := []any{}
+
+	for k, v := range baseColValueMap {
+		if stringInSlice(k, idColumns) {
+			if !v.IsZero() {
+				cols = append(cols, k)
+				vals = append(vals, getDriverValue(v))
+			}
+		}
+	}
+
+	for k, v := range colValueMap {
+		if !stringInSlice(k, idColumns) {
+			if _, ok := colFieldLookup[k]; ok {
+				cols = append(cols, k)
+				vals = append(vals, getDriverValue(v))
+			}
+		}
+	}
+
+	return cols, vals
+}
+
+func createPointerValue(original reflect.Value) reflect.Value {
+	originalType := original.Type()
+	pointerType := reflect.PtrTo(originalType)
+
+	pointerValue := reflect.New(pointerType.Elem())
+	pointerValue.Elem().Set(original)
+
+	return pointerValue
+}
+
+func (a *Accessor) createComposite(ctx context.Context, s *EntityMappingSchema, idFields ...string) error {
+	var baseColValueMap map[string]reflect.Value
+
+	var err error
+	for i, mm := range s.Schemas() {
+		if i < len(s.Schemas())-1 {
+			var pEntity reflect.Value
+			c, err := cpy.Anything(mm.Entity)
+			if err != nil {
+				return err
+			}
+
+			pEntity = createPointerValue(reflect.Indirect(reflect.ValueOf(c)))
+			err = a.create(ctx, pEntity.Interface(), mm, baseColValueMap, mm.TableName, idFields...)
+			if err != nil {
+				return err
+			}
+
+			// capture possible returned auto-increment id values
+			if i == 0 {
+				_, baseColValueMap, err = a.getMapping(pEntity.Interface(), idFields...)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			err = a.create(ctx, mm.Entity, mm, baseColValueMap, mm.TableName, idFields...)
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Usage example
@@ -247,6 +414,15 @@ func (a *Accessor) Read(ctx context.Context, entity any, tbl string, idFields ..
 		idFields = []string{"Id"}
 	}
 
+	s, err := EntitySchema(entity, reflect.TypeOf(entity), tbl)
+	if err != nil {
+		return err
+	}
+
+	if len(s.BaseMappings) > 0 {
+		return a.readComposite(ctx, s, idFields...)
+	}
+
 	idColumns, colValueMap, err := a.getMapping(entity, idFields...)
 	if err != nil {
 		return errors.New("missing ID columns")
@@ -257,10 +433,32 @@ func (a *Accessor) Read(ctx context.Context, entity any, tbl string, idFields ..
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
 			if stringInSlice(k, idColumns) {
-				eq[k] = getDriverValue(v.Interface())
+				eq[k] = getDriverValue(v)
 			}
 		}
 		return builder.Select("*").From(tbl).Where(eq)
+	})
+}
+
+func (a *Accessor) readComposite(ctx context.Context, s *EntityMappingSchema, idFields ...string) error {
+	idColumns, colValueMap, err := a.getMapping(s.Entity, idFields...)
+	if err != nil {
+		return err
+	}
+
+	tables := s.Tables()
+	return a.SqlizerGet(ctx, s.Entity, func(builder squirrel.StatementBuilderType) Sqlizer {
+		eq := squirrel.Eq{}
+		for k, v := range colValueMap {
+			if stringInSlice(k, idColumns) {
+				eq[fmt.Sprintf("%s.%s", tables[0], k)] = getDriverValue(v)
+			}
+		}
+		return builder.
+			Select(s.GetColumnSelectString()).
+			From(tables[0]).
+			Join(s.GetTableJoinString(idColumns...)).
+			Where(eq)
 	})
 }
 
@@ -300,7 +498,7 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
 			if stringInSlice(k, idColumns) {
-				eq[k] = getDriverValue(v.Interface())
+				eq[k] = getDriverValue(v)
 			}
 		}
 
@@ -310,13 +508,13 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
 
 			for k, v := range colValueMap {
 				if !stringInSlice(k, idColumns) && stringInSlice(k, colsChanged) {
-					q = q.Set(k, getDriverValue(v.Interface()))
+					q = q.Set(k, getDriverValue(v))
 				}
 			}
 		} else {
 			for k, v := range colValueMap {
 				if !stringInSlice(k, idColumns) {
-					q = q.Set(k, getDriverValue(v.Interface()))
+					q = q.Set(k, getDriverValue(v))
 				}
 			}
 		}
@@ -359,7 +557,7 @@ func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields 
 		eq := squirrel.Eq{}
 		for k, v := range colValueMap {
 			if stringInSlice(k, idColumns) {
-				eq[k] = getDriverValue(v.Interface())
+				eq[k] = getDriverValue(v)
 			}
 		}
 		return builder.Delete(tbl).Where(eq)
@@ -631,6 +829,70 @@ func ExecTx(
 	}
 }
 
+func EntitySchema(v any, typ reflect.Type, tableName string) (*EntityMappingSchema, error) {
+	m := EntityMappingSchema{
+		TableName:  tableName,
+		Entity:     v,
+		EntityType: reflectx.Deref(typ),
+		Columns:    map[string]string{},
+	}
+
+	typ = reflectx.Deref(typ)
+	if typ.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("type %s should be struct", typ.Name())
+	}
+
+	// second round, check annonymous embedded fields
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+
+		if field.Anonymous {
+			ft := reflectx.Deref(field.Type)
+			if ft.Kind() != reflect.Struct {
+				return nil, fmt.Errorf("embedded type %s in type %s should be struct", ft.Name(), typ.Name())
+			}
+
+			col, attrs, err := fieldMappedColumnWithAttributes(field, "db")
+			if err != nil {
+				return nil, err
+			}
+
+			if col != "" {
+				return nil, fmt.Errorf("embedded type %s in type %s should have empty column name", ft.Name(), typ.Name())
+			}
+
+			if baseTable, ok := attrs["table"]; ok {
+				if baseTable == tableName {
+					return nil, fmt.Errorf("embedded type %s in type %s should not have the same table mapping", ft.Name(), typ.Name())
+				}
+
+				fieldValue := reflect.Indirect(reflect.ValueOf(v)).Field(i)
+				baseSchema, err := EntitySchema(fieldValue.Interface(), ft, baseTable)
+
+				if err != nil {
+					return nil, err
+				}
+
+				m.BaseMappings = append(m.BaseMappings, baseSchema)
+			} else {
+				return nil, fmt.Errorf("embedded type %s in type %s should have table attribute", ft.Name(), typ.Name())
+			}
+
+		} else {
+			col, _, err := fieldMappedColumnWithAttributes(field, "db")
+			if err != nil {
+				return nil, err
+			}
+
+			if col != "" {
+				m.Columns[field.Name] = col
+			}
+		}
+	}
+
+	return &m, nil
+}
+
 // Column return the mapped column mapping name in entity type of v
 // and specified Go struct field name.
 // Optimizing with multi-threaded safe caching if it is needed
@@ -743,6 +1005,40 @@ func fieldMappedColumn(
 	return mappedName
 }
 
+func fieldMappedColumnWithAttributes(
+	field reflect.StructField,
+	tagName string,
+) (string, map[string]string, error) {
+	attrs := map[string]string{}
+
+	if !strings.Contains(string(field.Tag), tagName+":") {
+		return "", attrs, fmt.Errorf("%s does not exist", tagName)
+	}
+
+	tag := field.Tag.Get(tagName)
+
+	// split the options from the name
+	parts := strings.Split(tag, ",")
+	mappedName := parts[0]
+
+	if mappedName == "-" {
+		mappedName = ""
+	}
+
+	if len(parts) > 1 {
+		for i := 1; i < len(parts); i++ {
+			tokens := strings.Split(strings.Trim(parts[i], " "), "=")
+			if len(tokens) == 2 {
+				attrs[tokens[0]] = tokens[1]
+			} else {
+				attrs[tokens[0]] = ""
+			}
+		}
+	}
+
+	return mappedName, attrs, nil
+}
+
 func baseType(t reflect.Type, expected reflect.Kind) (reflect.Type, error) {
 	t = reflectx.Deref(t)
 	if t.Kind() != expected {
@@ -775,7 +1071,22 @@ func removeNestedCols(m map[string]reflect.Value) map[string]reflect.Value {
 	return ret
 }
 
-func getDriverValue(v any) any {
+func getDriverValue(val reflect.Value) any {
+	var v any
+
+	if val.Kind() == reflect.Pointer {
+		if val.IsNil() {
+			return nil
+		}
+
+		v = val.Elem().Interface()
+		if reflect.ValueOf(v).IsZero() {
+			return nil
+		}
+	} else {
+		v = val.Interface()
+	}
+
 	if v != nil {
 		if valuer, ok := v.(driver.Valuer); ok {
 			val, err := valuer.Value()

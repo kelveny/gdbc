@@ -4,8 +4,10 @@ go 1.18
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/barkimedes/go-deepcopy v0.0.0-20220514131651-17c30cfc62df
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/kelveny/mockcompose v0.1.9
+	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.16
 	github.com/stretchr/testify v1.8.0
 	go.uber.org/zap v1.24.0

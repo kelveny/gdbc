@@ -72,6 +72,11 @@ INSERT INTO person(first_name, last_name, email, added_at) VALUES (?, ?, ?, ?)
 	_ = s.Db.MustExec(r(`
 INSERT INTO person(first_name, last_name, email, added_at) VALUES (?, ?, ?, ?)	
 	`), "bar", "test", "bar@test", time.Now().UTC())
+
+	_ = s.Db.MustExec(r(`
+INSERT INTO person(first_name, last_name, email, added_at) VALUES (?, ?, ?, ?)	
+	`), "baz", "test", nil, time.Now().UTC())
+
 }
 
 func (s *TestSuite) teardownTestDatabase() {
@@ -110,6 +115,15 @@ func (s *TestSuite) TestGeneratedTypes() {
 	assert.True(err == nil)
 	assert.True(p.LastName == "test")
 	assert.True(p.Email == "foo@test")
+
+	p = Person{
+		FirstName: "baz",
+	}
+	err = accessor.Read(context.Background(), &p, p.TableName(), p.EntityFields().FirstName)
+	assert.True(err == nil)
+	assert.True(p.LastName == "test")
+	assert.True(p.Email == "")
+
 }
 
 func (s *TestSuite) TestPartialUpdate() {
