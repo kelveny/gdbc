@@ -31,7 +31,7 @@ type ManagerWithUpdateTracker struct {
 	trackMap map[string]bool
 }
 
-func (e *ManagerWithUpdateTracker) ColumnsChanged() []string {
+func (e *ManagerWithUpdateTracker) ColumnsChanged(tbl ...string) []string {
 	cols := []string{}
 
 	for col, _ := range e.trackMap {

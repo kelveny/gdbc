@@ -59,7 +59,7 @@ type PersonWithUpdateTracker struct {
 	trackMap map[string]bool
 }
 
-func (e *PersonWithUpdateTracker) ColumnsChanged() []string {
+func (e *PersonWithUpdateTracker) ColumnsChanged(tbl ...string) []string {
 	cols := []string{}
 
 	for col, _ := range e.trackMap {

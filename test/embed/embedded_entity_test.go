@@ -177,6 +177,23 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 	err = a.Read(context.Background(), &m2, "manager")
 	req.Error(err)
 
+	// update & read-back
+	e4 := EmployeeWithUpdateTracker{}
+	e4.Id = 2
+
+	e4.SetCompany(toPtr("bar.com"))
+	e4.SetCurrentMood(toPtr("sad"))
+
+	_, err = a.Update(context.Background(), &e4, "employee")
+	req.NoError(err)
+
+	e = Employee{}
+	e.Id = 2
+	err = a.Read(context.Background(), &e, "employee")
+	req.NoError(err)
+	req.Equal("bar.com", *e.Company)
+	req.Equal("sad", *e.CurrentMood)
+
 	// delete
 	p3 := Person{}
 	p3.Id = 1

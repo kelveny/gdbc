@@ -475,7 +475,7 @@ func (p *PersonWithUpdateTracker) SetEmail(email string) *PersonWithUpdateTracke
 	return p
 }
 
-func (p *PersonWithUpdateTracker) ColumnsChanged() []string {
+func (p *PersonWithUpdateTracker) ColumnsChanged(tbl ...string) []string {
 	var colsChanged []string
 
 	if p.trackMap != nil {

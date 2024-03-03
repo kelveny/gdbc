@@ -72,13 +72,13 @@ type Sqlizer interface {
 }
 
 type UpdateTracker interface {
-	ColumnsChanged() []string
+	ColumnsChanged(tbl ...string) []string
 }
 
 type EntityMappingSchema struct {
 	TableName string
 
-	// field name -> column name
+	// field name -> column name (note, fields in embedded type are not included here)
 	Columns map[string]string
 
 	// embedded mappings
@@ -146,6 +146,17 @@ func getJoinOnString(table1, table2 string, idColumns ...string) string {
 		}
 	}
 	return builder.String()
+}
+
+type noopSqlResult struct {
+}
+
+func (r noopSqlResult) LastInsertId() (int64, error) {
+	return 0, nil
+}
+
+func (r noopSqlResult) RowsAffected() (int64, error) {
+	return 0, nil
 }
 
 type Accessor struct {
@@ -488,32 +499,74 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
 		idFields = []string{"Id"}
 	}
 
+	s, err := EntitySchema(entity, reflect.TypeOf(entity), tbl)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(s.BaseMappings) > 0 {
+		return a.updateComposite(ctx, s, entity.(UpdateTracker), idFields...)
+	}
+
 	idColumns, colValueMap, err := a.getMapping(entity, idFields...)
 	if err != nil {
 		return nil, errors.New("missing ID columns")
 	}
 
+	tracker, _ := entity.(UpdateTracker)
+
+	if tracker != nil && len(tracker.ColumnsChanged(s.TableName)) == 0 {
+		return noopSqlResult{}, nil
+	}
+
+	colFieldLookup := map[string]string{}
+	for field, col := range s.Columns {
+		colFieldLookup[col] = field
+	}
+
+	return a.execUpdate(
+		ctx,
+		idColumns,
+		colFieldLookup,
+		colValueMap,
+		colValueMap,
+		s.TableName,
+		tracker,
+	)
+}
+
+func (a *Accessor) execUpdate(
+	ctx context.Context,
+	idColumns []string,
+	colFieldLookup map[string]string,
+	baseColValueMap map[string]reflect.Value,
+	colValueMap map[string]reflect.Value,
+	tbl string,
+	tracker UpdateTracker,
+) (sql.Result, error) {
 	colValueMap = removeNestedCols(colValueMap)
+
 	return a.SqlizerExec(ctx, func(builder squirrel.StatementBuilderType) Sqlizer {
 		eq := squirrel.Eq{}
-		for k, v := range colValueMap {
+		for k, v := range baseColValueMap {
 			if stringInSlice(k, idColumns) {
 				eq[k] = getDriverValue(v)
 			}
 		}
 
 		q := builder.Update(tbl)
-		if tracker, ok := entity.(UpdateTracker); ok {
-			colsChanged := tracker.ColumnsChanged()
+		if tracker != nil {
+			colsChanged := tracker.ColumnsChanged(tbl)
 
 			for k, v := range colValueMap {
-				if !stringInSlice(k, idColumns) && stringInSlice(k, colsChanged) {
+				if !stringInSlice(k, idColumns) && colFieldLookup[k] != "" && stringInSlice(k, colsChanged) {
 					q = q.Set(k, getDriverValue(v))
 				}
 			}
 		} else {
+			// perform full update
 			for k, v := range colValueMap {
-				if !stringInSlice(k, idColumns) {
+				if !stringInSlice(k, idColumns) && colFieldLookup[k] != "" {
 					q = q.Set(k, getDriverValue(v))
 				}
 			}
@@ -521,6 +574,89 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
 
 		return q.Where(eq)
 	})
+}
+
+func (a *Accessor) updateComposite(
+	ctx context.Context,
+	s *EntityMappingSchema,
+	tracker UpdateTracker,
+	idFields ...string,
+) (sql.Result, error) {
+	var baseColValueMap map[string]reflect.Value
+	var idColumns []string
+
+	var result sql.Result
+
+	for i, m := range s.Schemas() {
+		if i < len(s.Schemas())-1 {
+			var pEntity reflect.Value
+			c, err := cpy.Anything(m.Entity)
+			if err != nil {
+				return nil, err
+			}
+
+			pEntity = createPointerValue(reflect.Indirect(reflect.ValueOf(c)))
+
+			// capture possible returned auto-increment id values
+			if i == 0 {
+				idColumns, baseColValueMap, err = a.getMapping(pEntity.Interface(), idFields...)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			if tracker != nil && len(tracker.ColumnsChanged(m.TableName)) == 0 {
+				continue
+			}
+
+			colFieldLookup := map[string]string{}
+			for field, col := range m.Columns {
+				colFieldLookup[col] = field
+			}
+
+			_, err = a.execUpdate(
+				ctx,
+				idColumns,
+				colFieldLookup,
+				baseColValueMap,
+				baseColValueMap,
+				m.TableName,
+				tracker,
+			)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			idColumns, colValueMap, err := a.getMapping(m.Entity, idFields...)
+			if err != nil {
+				return nil, err
+			}
+
+			if tracker != nil && len(tracker.ColumnsChanged(m.TableName)) == 0 {
+				continue
+			}
+
+			colFieldLookup := map[string]string{}
+			for field, col := range m.Columns {
+				colFieldLookup[col] = field
+			}
+
+			result, err = a.execUpdate(
+				ctx,
+				idColumns,
+				colFieldLookup,
+				baseColValueMap,
+				colValueMap,
+				m.TableName,
+				tracker,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // Usage example:
@@ -878,6 +1014,31 @@ func ExecTx(
 	}
 }
 
+func entityType(typ reflect.Type) reflect.Type {
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+
+		if !field.Anonymous {
+			_, _, err := fieldMappedColumnWithAttributes(field, "db")
+			if err == nil {
+				return typ
+			}
+		}
+	}
+
+	if typ.NumField() > 0 {
+		field := typ.Field(0)
+		if field.Anonymous {
+			typ = reflectx.Deref(field.Type)
+			if typ.Kind() == reflect.Struct {
+				return entityType(typ)
+			}
+		}
+	}
+
+	return nil
+}
+
 func EntitySchema(v any, typ reflect.Type, tableName string) (*EntityMappingSchema, error) {
 	m := EntityMappingSchema{
 		TableName:  tableName,
@@ -889,6 +1050,11 @@ func EntitySchema(v any, typ reflect.Type, tableName string) (*EntityMappingSche
 	typ = reflectx.Deref(typ)
 	if typ.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("type %s should be struct", typ.Name())
+	}
+
+	typ = entityType(typ)
+	if typ == nil {
+		return nil, fmt.Errorf("type %s should be in compliance with entity type", typ.Name())
 	}
 
 	// second round, check annonymous embedded fields
