@@ -176,6 +176,49 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 	m2.Id = 0
 	err = a.Read(context.Background(), &m2, "manager")
 	req.Error(err)
+
+	// delete
+	p3 := Person{}
+	p3.Id = 1
+	_, err = a.Delete(context.Background(), &p3, "person")
+	req.NoError(err)
+	req.True(p3.Id == 1)
+	req.Equal("foo", p3.FirstName)
+	req.Equal("gdbc", p3.LastName)
+
+	e3 := Employee{}
+	e3.Id = 2
+	_, err = a.Delete(context.Background(), &e3, "employee")
+	req.NoError(err)
+	req.True(e3.Id == 2)
+	req.Equal("bar", e3.FirstName)
+	req.Equal("gdbc", e3.LastName)
+	req.Equal("angry", *e2.CurrentMood)
+	req.Equal("foo.com", *e2.Company)
+
+	m3 := Manager{}
+	m3.Id = 1000
+	_, err = a.Delete(context.Background(), &m3, "manager")
+	req.NoError(err)
+	req.True(m3.Id == 1000)
+	req.Equal("foobar", m3.FirstName)
+	req.Equal("gdbc", m3.LastName)
+	req.Equal("happy", *m3.CurrentMood)
+	req.Equal("foo.com", *m3.Company)
+	req.Equal("CIO", *m3.Title)
+
+	// negative deletes
+	p3.Id = 0
+	err = a.Read(context.Background(), &p3, "person")
+	req.Error(err)
+
+	e3.Id = 0
+	err = a.Read(context.Background(), &e3, "employee")
+	req.Error(err)
+
+	m3.Id = 0
+	err = a.Read(context.Background(), &m3, "manager")
+	req.Error(err)
 }
 
 func toPtr(s string) *string {

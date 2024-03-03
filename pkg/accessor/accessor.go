@@ -539,6 +539,7 @@ func (a *Accessor) Update(ctx context.Context, entity any, tbl string, idFields 
    result, err := accessor.Delete(context.Background(), p, "person", "FirstName", "LastName")
 */
 func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields ...string) (sql.Result, error) {
+	// if entity is intended to read back before delete
 	if reflect.TypeOf(entity).Kind() == reflect.Ptr {
 		_ = a.Read(ctx, entity, tbl, idFields...)
 	}
@@ -547,11 +548,29 @@ func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields 
 		idFields = []string{"Id"}
 	}
 
+	s, err := EntitySchema(entity, reflect.TypeOf(entity), tbl)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(s.BaseMappings) > 0 {
+		return a.deleteComposite(ctx, s, idFields...)
+	}
+
 	idColumns, colValueMap, err := a.getMapping(entity, idFields...)
 	if err != nil {
 		return nil, errors.New("missing ID columns")
 	}
 
+	return a.execDelete(ctx, colValueMap, tbl, idColumns)
+}
+
+func (a *Accessor) execDelete(
+	ctx context.Context,
+	colValueMap map[string]reflect.Value,
+	tbl string,
+	idColumns []string,
+) (sql.Result, error) {
 	colValueMap = removeNestedCols(colValueMap)
 	return a.SqlizerExec(ctx, func(builder squirrel.StatementBuilderType) Sqlizer {
 		eq := squirrel.Eq{}
@@ -562,6 +581,35 @@ func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields 
 		}
 		return builder.Delete(tbl).Where(eq)
 	})
+}
+
+func (a *Accessor) deleteComposite(ctx context.Context, s *EntityMappingSchema, idFields ...string) (sql.Result, error) {
+	var err error
+	var r sql.Result
+
+	schemas := s.Schemas()
+	for i := len(schemas) - 1; i >= 0; i-- {
+		m := schemas[i]
+
+		var pEntity reflect.Value
+		c, err := cpy.Anything(m.Entity)
+		if err != nil {
+			return nil, err
+		}
+		pEntity = createPointerValue(reflect.Indirect(reflect.ValueOf(c)))
+
+		idColumns, colValueMap, err := a.getMapping(pEntity.Interface(), idFields...)
+		if err != nil {
+			return nil, errors.New("missing ID columns")
+		}
+
+		r, err = a.execDelete(ctx, colValueMap, m.TableName, idColumns)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return r, err
 }
 
 func (a *Accessor) getMapping(entity any, idFields ...string) (idColumns []string, colValueMap map[string]reflect.Value, outErr error) {
@@ -582,6 +630,7 @@ func (a *Accessor) getMapping(entity any, idFields ...string) (idColumns []strin
 		mapper = tx.Mapper
 	}
 
+	// Note: mapper.FieldMap does not support the case when entity points to an embedded type
 	// column (tag name) -> reflect.Value mapping
 	colValueMap = mapper.FieldMap(reflect.ValueOf(entity))
 	return
