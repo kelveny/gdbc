@@ -101,11 +101,74 @@ func (e *{{ $root.Entity }}WithUpdateTracker) Set{{ $f.Name }}(val {{ $f.TypeDec
 `
 )
 
+/////////////////////////////////////////////////////////////////////////////
+
 type EntityFieldSpec struct {
 	Name     string
 	Column   string
 	TypeDecl string
 }
+
+type EntitySpec struct {
+	Name string
+
+	TokenFset  *token.FileSet // original token fset
+	TypeSpec   *ast.StructType
+	FieldSpecs []EntityFieldSpec
+}
+
+var entityRegistry map[string]*EntitySpec
+
+func registerEntitySpec(entitySpec *EntitySpec) {
+	if entityRegistry == nil {
+		entityRegistry = make(map[string]*EntitySpec)
+	}
+
+	if _, ok := entityRegistry[entitySpec.Name]; !ok {
+		entityRegistry[entitySpec.Name] = entitySpec
+	}
+}
+
+func lookupEntitySpec(entityName string) *EntitySpec {
+	if entityRegistry != nil {
+		return entityRegistry[entityName]
+	}
+
+	return nil
+}
+
+func (es *EntitySpec) FlattenFieldSpecs(tbl string, fieldSpecs map[string][]EntityFieldSpec) {
+	fieldSpecs[tbl] = es.FieldSpecs
+
+	for _, field := range es.TypeSpec.Fields.List {
+		if field.Tag != nil {
+			if strings.HasPrefix(field.Tag.Value, "`db:") {
+				tagValue := strings.Split(field.Tag.Value, ":")
+				attrs := strings.Split(tagValue[1], ",")
+				if len(attrs) > 1 {
+					for _, v := range attrs[1:] {
+						kv := strings.Split(v, "=")
+						if len(kv) > 1 {
+							if strings.Trim(kv[0], " ") == "table" {
+								tbl := strings.Trim(kv[1], " ")
+
+								name := gosyntax.ExprDeclString(es.TokenFset, field.Type)
+								name = strings.Trim(name, "*") // remove pointer declaration from name
+
+								baseSpec := lookupEntitySpec(name)
+								if baseSpec != nil {
+									baseSpec.FlattenFieldSpecs(tbl, fieldSpecs)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////
 
 // must be public for it to be used in loading YAML configuration
 type Option struct {
@@ -171,6 +234,24 @@ func scanDir(
 	return nil
 }
 
+func buildEntityRegistry(pkgDir string, fi os.FileInfo) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(
+		fset,
+		filepath.Join(pkgDir, fi.Name()),
+		nil,
+		parser.ParseComments)
+
+	if err != nil {
+		logger.Log(logger.ERROR, "Error in parsing %s, error: %s\n",
+			filepath.Join(pkgDir, fi.Name()), err,
+		)
+		return
+	}
+
+	scanToBuildEntityRegistry(pkgDir, fi, fset, file)
+}
+
 func generateWithConfig(config *Config) func(string, os.FileInfo) {
 	return func(pkgDir string, fi os.FileInfo) {
 		fset := token.NewFileSet()
@@ -190,6 +271,29 @@ func generateWithConfig(config *Config) func(string, os.FileInfo) {
 		logger.Log(logger.PROMPT, "Scan %s... \n", fi.Name())
 		scanToEnhanceEntities(pkgDir, fi, fset, file, config)
 		logger.Log(logger.PROMPT, "Done entity enhancement for %s \n", fi.Name())
+	}
+}
+
+func scanToBuildEntityRegistry(_ string, _ os.FileInfo, fset *token.FileSet, file *ast.File) {
+	for _, d := range file.Decls {
+		if gd, ok := d.(*ast.GenDecl); ok {
+			for _, spec := range gd.Specs {
+				if tspec, ok := spec.(*ast.TypeSpec); ok {
+					if entity, ok := tspec.Type.(*ast.StructType); ok {
+						if isEntityStruct(entity) {
+							entitySpec := EntitySpec{
+								Name:       tspec.Name.Name,
+								TokenFset:  fset,
+								TypeSpec:   entity,
+								FieldSpecs: getEntityFields(fset, entity),
+							}
+
+							registerEntitySpec(&entitySpec)
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -238,6 +342,17 @@ func columnFromTag(tag string) string {
 	}
 
 	return ""
+}
+
+func isEntityStruct(st *ast.StructType) bool {
+	for _, field := range st.Fields.List {
+		if field.Tag != nil {
+			if strings.HasPrefix(field.Tag.Value, "`db:") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func getEntityFields(fset *token.FileSet, entity *ast.StructType) []EntityFieldSpec {
@@ -379,6 +494,9 @@ func Execute() {
 		},
 	}
 
+	scanDir("", scanPredicate, buildEntityRegistry)
+
+	// TODO we can scan from the entity registry now
 	scanDir("", scanPredicate, generateWithConfig(config))
 }
 
