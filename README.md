@@ -5,7 +5,7 @@ The goal of `gdbc` is not to provide yet another [ORM](https://en.wikipedia.org/
 - Minimal pre-setup
 - Not intrusive, you don't need a framework to use it
 - Safe and implicit transaction management
-- Out-of-box CURD operations for database entity objects
+- Out-of-box [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) operations for database entity objects, including entity objects that are single-inheritance related.
 - Flexible in various use cases
 
 Please note, almost all `gdbc` functions take `context.Context` as function input parameters, for contexts that are cancellable, be aware of that it may impact query results. You might want to use isolated context for database operations. We made this trade-off for simplifying `gdbc` interface.
@@ -309,9 +309,11 @@ Note, you can use either a value type or a pointer type for `entity` parameter o
    })
 ```
 
-## Notes about entity CRUD
+## Entity [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete)
 
-Although [sqlx](https://github.com/jmoiron/sqlx) supports complex (nested) mapping operations, entity CRUD methods(`Create`, `Read`, `Update`, `Delete`) utilize one-level only mapping operations. This is a design choice to make entity level CRUD operations be generic. For entity types that have complex fields, you will need to employ [sql.Scanner](https://pkg.go.dev/database/sql#Scanner) and [driver.Valur](https://cs.opensource.google/go/go/+/refs/tags/go1.20.5:src/database/sql/driver/types.go;l=39) facilities to map between complex field types and driver supported value types. Following example illustrates such a mapping for `NULL-able` primitive value types in [Postgres](https://www.postgresql.org/).
+### Complex fields such as those contain JSON objects
+
+Although [sqlx](https://github.com/jmoiron/sqlx) supports complex (nested) mapping operations, entity [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) methods(`Create`, `Read`, `Update`, `Delete`) utilize one-level only mapping operations. This is a design choice to make entity level [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) operations be generic. For entity types that have complex fields, you will need to employ [sql.Scanner](https://pkg.go.dev/database/sql#Scanner) and [driver.Valur](https://cs.opensource.google/go/go/+/refs/tags/go1.20.5:src/database/sql/driver/types.go;l=39) facilities to map between complex field types and driver supported value types. Following example illustrates such a mapping for `NULL-able` primitive value types in [Postgres](https://www.postgresql.org/).
 
 ```go
 import (
@@ -372,3 +374,82 @@ func (e NullPrimitive[T]) Value() (driver.Value, error) {
 ```
 
 For complex field types with nested structure, Go [json](https://pkg.go.dev/encoding/json) marshaler can be your friend to bridge basic driver supported types and complex field types under [sql.Scanner](https://pkg.go.dev/database/sql#Scanner)/[driver.Valur](https://cs.opensource.google/go/go/+/refs/tags/go1.20.5:src/database/sql/driver/types.go;l=39) framework.
+
+### Entity inheritance
+
+Multiple entity types can form single-inheritance relationship, as following example shows:
+
+```sql
+CREATE TYPE mood AS ENUM ('happy', 'sad', 'angry', 'calm');
+
+CREATE TABLE IF NOT EXISTS person (
+    id serial primary key,
+    first_name text,
+    last_name text,
+    email text,
+    age integer,
+    current_mood mood, 
+    added_at timestamp
+);
+
+CREATE SEQUENCE IF NOT EXISTS person_id_seq START WITH 1 INCREMENT BY 1 CYCLE;
+
+CREATE TABLE IF NOT EXISTS employee (
+    id integer primary key,
+    company text
+);
+ALTER TABLE employee ADD CONSTRAINT fk_employee_id FOREIGN KEY (id) REFERENCES person(id);
+
+CREATE TABLE IF NOT EXISTS manager (
+    id integer primary key,
+    title text
+);
+ALTER TABLE manager ADD CONSTRAINT fk_manager_id FOREIGN KEY (id) REFERENCES employee(id);
+```
+
+Corresponding Go entity types:
+
+```go
+//go:generate gdbc -entity Person -table person
+type Person struct {
+    Id          int        `db:"id"`
+    FirstName   string     `db:"first_name"`
+    LastName    string     `db:"last_name"`
+    Email       *string    `db:"email"`
+    Age         *int       `db:"age"`
+    CurrentMood *string    `db:"current_mood"`
+    AddedAt     *time.Time `db:"added_at"`
+}
+
+//go:generate gdbc -entity Employee -table employee
+type Employee struct {
+    Person `db:",table=person"`
+
+    Company *string `db:"company"`
+}
+
+//go:generate gdbc -entity Manager -table manager
+type Manager struct {
+    Employee `db:",table=employee"`
+
+    Title *string `db:"title"`
+}
+```
+
+`gdbc` does not provide full [ORM](https://en.wikipedia.org/wiki/Object%E2%80%93relational_mapping#:~:text=Object%E2%80%93relational%20mapping%20(ORM%2C,from%20within%20the%20programming%20language.%22)) mapping capabilties, however, it supports [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) basics to honor single inheritance relationship of entities. This can be very handy, as you do not need to worry about manipulating among multiple tables directly, allow you to focus on your data model.
+
+```go
+m4 := ManagerWithUpdateTracker{}
+m4.Id = 1000
+m4.SetCompany(toPtr("bar.com"))
+m4.SetCurrentMood(toPtr("sad"))
+m4.SetTitle(toPtr("CEO"))
+
+_, err = a.Update(context.Background(), &m4, "manager")
+req.NoError(err)
+```
+
+Be aware of restrictions in `gdbc` single inheritance support:
+
+- It is up to you to use `gdbc` implicit transaction facility to guard [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) operations that target objects across multiple database tables
+- Related Go entity types should be put within the same Go package, this is limited by current GDBC code generation tool

@@ -202,6 +202,13 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 
 	_, err = a.Update(context.Background(), &m4, "manager")
 	req.NoError(err)
+	m = Manager{}
+	m.Id = 1000
+	err = a.Read(context.Background(), &m, "manager")
+	req.NoError(err)
+	req.Equal("bar.com", *m.Company)
+	req.Equal("sad", *m.CurrentMood)
+	req.Equal("CEO", *m.Title)
 
 	// delete
 	p3 := Person{}
