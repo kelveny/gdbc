@@ -70,34 +70,65 @@ func (e *{{ .Entity }}) TableColumns() *{{ .Entity }}TableColumns {
 
 type {{ .Entity }}WithUpdateTracker struct {
     {{ .Entity }}
-    trackMap map[string]bool
+	trackMap map[string]map[string]bool
 }
 
-func (e *{{ .Entity }}WithUpdateTracker) ColumnsChanged() []string {
+func (e *{{ .Entity }}WithUpdateTracker) registerChange(tbl string, col string) {
+	if e.trackMap == nil {
+		e.trackMap = make(map[string]map[string]bool)
+	}
+
+	if m, ok := e.trackMap[tbl]; ok {
+		m[col] = true
+	} else {
+		m = make(map[string]bool)
+		e.trackMap[tbl] = m
+
+		m[col] = true
+	}
+}
+
+func (e *{{ .Entity }}WithUpdateTracker) ColumnsChanged(tbl ...string) []string {
     cols := []string{}
 
-    for col, _ := range e.trackMap {
-        cols = append(cols, col)
-    }
+	if tbl == nil {
+		tbl = []string{"{{ .Table }}"}
+	}
+
+	if e.trackMap != nil {
+		m := e.trackMap[tbl[0]]
+		for col := range m {
+			cols = append(cols, col)
+		}
+	}
 
     return cols
 }
 
 {{- with $root := . }}
+
 {{ range $index, $f := .Fields }}
 func (e *{{ $root.Entity }}WithUpdateTracker) Set{{ $f.Name }}(val {{ $f.TypeDecl }}) *{{ $root.Entity }}WithUpdateTracker {
     e.{{ $f.Name }} = val
-
-    if e.trackMap == nil {
-        e.trackMap = make(map[string]bool)
-    }
-
-    e.trackMap["{{ $f.Column }}"] = true
-
+	e.registerChange("{{ $root.Table }}", "{{ $f.Column }}")
     return e
 }
 {{ end }}
+
+{{ range $i, $base := .BaseFields }}
+{{ range $j, $f := $base.Fields }}
+
+func (e *{{ $root.Entity }}WithUpdateTracker) Set{{ $f.Name }}(val {{ $f.TypeDecl }}) *{{ $root.Entity }}WithUpdateTracker {
+	e.{{ $f.Name }} = val
+	e.registerChange("{{ $base.Table }}", "{{ $f.Column }}")
+	return e
+}
+
 {{ end }}
+{{ end }}
+
+{{ end }}
+
 `
 )
 
@@ -137,14 +168,15 @@ func lookupEntitySpec(entityName string) *EntitySpec {
 	return nil
 }
 
-func (es *EntitySpec) FlattenFieldSpecs(tbl string, fieldSpecs map[string][]EntityFieldSpec) {
+func (es *EntitySpec) FlattenFieldSpecs(tbl string, fieldSpecs map[string][]EntityFieldSpec) (tables []string) {
+	tables = append(tables, tbl)
 	fieldSpecs[tbl] = es.FieldSpecs
 
 	for _, field := range es.TypeSpec.Fields.List {
 		if field.Tag != nil {
 			if strings.HasPrefix(field.Tag.Value, "`db:") {
-				tagValue := strings.Split(field.Tag.Value, ":")
-				attrs := strings.Split(tagValue[1], ",")
+				tagValue := strings.Split(strings.Trim(field.Tag.Value, "`"), ":")
+				attrs := strings.Split(strings.Trim(tagValue[1], "\""), ",")
 				if len(attrs) > 1 {
 					for _, v := range attrs[1:] {
 						kv := strings.Split(v, "=")
@@ -157,7 +189,7 @@ func (es *EntitySpec) FlattenFieldSpecs(tbl string, fieldSpecs map[string][]Enti
 
 								baseSpec := lookupEntitySpec(name)
 								if baseSpec != nil {
-									baseSpec.FlattenFieldSpecs(tbl, fieldSpecs)
+									tables = append(tables, baseSpec.FlattenFieldSpecs(tbl, fieldSpecs)...)
 								}
 							}
 						}
@@ -166,6 +198,7 @@ func (es *EntitySpec) FlattenFieldSpecs(tbl string, fieldSpecs map[string][]Enti
 			}
 		}
 	}
+	return
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -378,8 +411,9 @@ func generate(
 	writer io.Writer,
 	pkgDir string,
 	file *ast.File,
-	entity *ast.StructType,
-	fields []EntityFieldSpec,
+	_ *ast.StructType,
+	tables []string,
+	fields map[string][]EntityFieldSpec,
 	option *Option,
 	cleanImports bool,
 ) error {
@@ -395,15 +429,37 @@ func generate(
 	}
 	gogen.WriteImportDecls(writer, imports)
 
-	// generate code
-	binding := struct {
-		Entity string
+	baseFields := []struct {
 		Table  string
 		Fields []EntityFieldSpec
+	}{}
+
+	if len(tables) > 1 {
+		for _, tbl := range tables[1:] {
+			baseFields = append(baseFields, struct {
+				Table  string
+				Fields []EntityFieldSpec
+			}{
+				Table:  tbl,
+				Fields: fields[tbl],
+			})
+		}
+	}
+
+	// generate code
+	binding := struct {
+		Entity     string
+		Table      string
+		Fields     []EntityFieldSpec
+		BaseFields []struct {
+			Table  string
+			Fields []EntityFieldSpec
+		}
 	}{
-		Entity: option.Entity,
-		Table:  option.Table,
-		Fields: fields,
+		Entity:     option.Entity,
+		Table:      option.Table,
+		Fields:     fields[option.Table],
+		BaseFields: baseFields,
 	}
 	t := template.Must(template.New("EntityEnhancer").
 		Parse(entityenhancerTemplate))
@@ -411,18 +467,23 @@ func generate(
 }
 
 func enhanceEntity(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast.File, entity *ast.StructType, option *Option) {
-	fields := getEntityFields(fset, entity)
-	if len(fields) > 0 {
+	entitySpec := lookupEntitySpec(option.Entity)
+	flattenFields := map[string][]EntityFieldSpec{}
+	tables := entitySpec.FlattenFieldSpecs(option.Table, flattenFields)
+
+	if len(flattenFields) > 0 {
 		var outputFileName string
 
 		// first pass to generate in memory
 		var buf bytes.Buffer
-		if err := generate(&buf, pkgDir, file, entity, fields, option, false); err != nil {
+		if err := generate(&buf, pkgDir, file, entity, tables, flattenFields, option, false); err != nil {
+			logger.Log(logger.ERROR, "Code generation error %s\n", err)
 			return
 		}
 
 		file, err := parser.ParseFile(fset, "", buf.Bytes(), parser.ParseComments)
 		if err != nil {
+			logger.Log(logger.ERROR, "Code generation error %s\n", err)
 			return
 		}
 
@@ -444,7 +505,9 @@ func enhanceEntity(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast
 			return
 		}
 
-		if err := generate(output, pkgDir, file, entity, fields, option, true); err != nil {
+		if err := generate(output, pkgDir, file, entity, tables, flattenFields, option, true); err != nil {
+			logger.Log(logger.ERROR, "Code generation error in cleaning imports%s\n", err)
+
 			output.Close()
 			return
 		}

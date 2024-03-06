@@ -65,6 +65,18 @@ func (e *EmployeeWithUpdateTracker) ColumnsChanged(tbl ...string) []string {
 	return cols
 }
 
+func (e *EmployeeWithUpdateTracker) SetCompany(val *string) *EmployeeWithUpdateTracker {
+	e.Company = val
+	e.registerChange("employee", "company")
+	return e
+}
+
+func (e *EmployeeWithUpdateTracker) SetId(val int) *EmployeeWithUpdateTracker {
+	e.Id = val
+	e.registerChange("person", "id")
+	return e
+}
+
 func (e *EmployeeWithUpdateTracker) SetFirstName(val string) *EmployeeWithUpdateTracker {
 	e.FirstName = val
 	e.registerChange("person", "first_name")
@@ -98,12 +110,5 @@ func (e *EmployeeWithUpdateTracker) SetCurrentMood(val *string) *EmployeeWithUpd
 func (e *EmployeeWithUpdateTracker) SetAddedAt(val *time.Time) *EmployeeWithUpdateTracker {
 	e.AddedAt = val
 	e.registerChange("person", "added_at")
-	return e
-}
-
-func (e *EmployeeWithUpdateTracker) SetCompany(val *string) *EmployeeWithUpdateTracker {
-	e.Company = val
-	e.registerChange("employee", "company")
-
 	return e
 }

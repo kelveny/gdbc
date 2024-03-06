@@ -194,6 +194,15 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 	req.Equal("bar.com", *e.Company)
 	req.Equal("sad", *e.CurrentMood)
 
+	m4 := ManagerWithUpdateTracker{}
+	m4.Id = 1000
+	m4.SetCompany(toPtr("bar.com"))
+	m4.SetCurrentMood(toPtr("sad"))
+	m4.SetTitle(toPtr("CEO"))
+
+	_, err = a.Update(context.Background(), &m4, "manager")
+	req.NoError(err)
+
 	// delete
 	p3 := Person{}
 	p3.Id = 1
@@ -210,8 +219,8 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 	req.True(e3.Id == 2)
 	req.Equal("bar", e3.FirstName)
 	req.Equal("gdbc", e3.LastName)
-	req.Equal("angry", *e2.CurrentMood)
-	req.Equal("foo.com", *e2.Company)
+	req.Equal("sad", *e3.CurrentMood)
+	req.Equal("bar.com", *e3.Company)
 
 	m3 := Manager{}
 	m3.Id = 1000
@@ -220,9 +229,9 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 	req.True(m3.Id == 1000)
 	req.Equal("foobar", m3.FirstName)
 	req.Equal("gdbc", m3.LastName)
-	req.Equal("happy", *m3.CurrentMood)
-	req.Equal("foo.com", *m3.Company)
-	req.Equal("CIO", *m3.Title)
+	req.Equal("sad", *m3.CurrentMood)
+	req.Equal("bar.com", *m3.Company)
+	req.Equal("CEO", *m3.Title)
 
 	// negative deletes
 	p3.Id = 0

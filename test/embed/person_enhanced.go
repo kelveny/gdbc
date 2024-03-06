@@ -56,14 +56,36 @@ func (e *Person) TableColumns() *PersonTableColumns {
 
 type PersonWithUpdateTracker struct {
 	Person
-	trackMap map[string]bool
+	trackMap map[string]map[string]bool
+}
+
+func (e *PersonWithUpdateTracker) registerChange(tbl string, col string) {
+	if e.trackMap == nil {
+		e.trackMap = make(map[string]map[string]bool)
+	}
+
+	if m, ok := e.trackMap[tbl]; ok {
+		m[col] = true
+	} else {
+		m = make(map[string]bool)
+		e.trackMap[tbl] = m
+
+		m[col] = true
+	}
 }
 
 func (e *PersonWithUpdateTracker) ColumnsChanged(tbl ...string) []string {
 	cols := []string{}
 
-	for col, _ := range e.trackMap {
-		cols = append(cols, col)
+	if tbl == nil {
+		tbl = []string{"person"}
+	}
+
+	if e.trackMap != nil {
+		m := e.trackMap[tbl[0]]
+		for col := range m {
+			cols = append(cols, col)
+		}
 	}
 
 	return cols
@@ -71,84 +93,42 @@ func (e *PersonWithUpdateTracker) ColumnsChanged(tbl ...string) []string {
 
 func (e *PersonWithUpdateTracker) SetId(val int) *PersonWithUpdateTracker {
 	e.Id = val
-
-	if e.trackMap == nil {
-		e.trackMap = make(map[string]bool)
-	}
-
-	e.trackMap["id"] = true
-
+	e.registerChange("person", "id")
 	return e
 }
 
 func (e *PersonWithUpdateTracker) SetFirstName(val string) *PersonWithUpdateTracker {
 	e.FirstName = val
-
-	if e.trackMap == nil {
-		e.trackMap = make(map[string]bool)
-	}
-
-	e.trackMap["first_name"] = true
-
+	e.registerChange("person", "first_name")
 	return e
 }
 
 func (e *PersonWithUpdateTracker) SetLastName(val string) *PersonWithUpdateTracker {
 	e.LastName = val
-
-	if e.trackMap == nil {
-		e.trackMap = make(map[string]bool)
-	}
-
-	e.trackMap["last_name"] = true
-
+	e.registerChange("person", "last_name")
 	return e
 }
 
 func (e *PersonWithUpdateTracker) SetEmail(val *string) *PersonWithUpdateTracker {
 	e.Email = val
-
-	if e.trackMap == nil {
-		e.trackMap = make(map[string]bool)
-	}
-
-	e.trackMap["email"] = true
-
+	e.registerChange("person", "email")
 	return e
 }
 
 func (e *PersonWithUpdateTracker) SetAge(val *int) *PersonWithUpdateTracker {
 	e.Age = val
-
-	if e.trackMap == nil {
-		e.trackMap = make(map[string]bool)
-	}
-
-	e.trackMap["age"] = true
-
+	e.registerChange("person", "age")
 	return e
 }
 
 func (e *PersonWithUpdateTracker) SetCurrentMood(val *string) *PersonWithUpdateTracker {
 	e.CurrentMood = val
-
-	if e.trackMap == nil {
-		e.trackMap = make(map[string]bool)
-	}
-
-	e.trackMap["current_mood"] = true
-
+	e.registerChange("person", "current_mood")
 	return e
 }
 
 func (e *PersonWithUpdateTracker) SetAddedAt(val *time.Time) *PersonWithUpdateTracker {
 	e.AddedAt = val
-
-	if e.trackMap == nil {
-		e.trackMap = make(map[string]bool)
-	}
-
-	e.trackMap["added_at"] = true
-
+	e.registerChange("person", "added_at")
 	return e
 }
