@@ -1054,7 +1054,7 @@ func EntitySchema(v any, typ reflect.Type, tableName string) (*EntityMappingSche
 
 	typ = entityType(typ)
 	if typ == nil {
-		return nil, fmt.Errorf("type %s should be in compliance with entity type", typ.Name())
+		return nil, fmt.Errorf("type %s should be in compliance with entity type", m.EntityType.Name())
 	}
 
 	// second round, check annonymous embedded fields

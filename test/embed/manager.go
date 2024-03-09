@@ -6,3 +6,11 @@ type Manager struct {
 
 	Title *string `db:"title"`
 }
+
+type ManagerWrapper struct {
+	Manager
+}
+
+type ManagerWrapperWrapper struct {
+	ManagerWrapper
+}

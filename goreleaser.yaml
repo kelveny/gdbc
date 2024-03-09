@@ -1,0 +1,16 @@
+build:
+  binary: gdbc
+  goos:
+    - linux
+    - darwin
+  goarch:
+    - amd64
+    - arm64
+  goarm:
+    - 6
+  ldflags: -s -w
+  hooks:
+    - go mod tidy
+    - go mod vendor
+    - sh ./release.build.sh
+  

@@ -10,11 +10,11 @@ The goal of `gdbc` is not to provide yet another [ORM](https://en.wikipedia.org/
 
 Please note, almost all `gdbc` functions take `context.Context` as function input parameters, for contexts that are cancellable, be aware of that it may impact query results. You might want to use isolated context for database operations. We made this trade-off for simplifying `gdbc` interface.
 
-Transaction support is implicit. The caller only needs to start the transaction flow with a static function, any operations carried out within the anonymous function are safe in case of a system crash. If the function executes without errors, the transaction will be finalized and committed. However, if an error or `panic` occurs during the function execution, the transaction will be reverted or rolled back.
+Transaction support is implicit. The caller only needs to start the transaction flow with a static function, any operations carried out within the anonymous function are safe in case of execution `panic`. If the function executes without errors, the transaction will be finalized and committed. However, if an error or `panic` occurs during the function execution, the transaction will be reverted or rolled back.
 
 `gdbc` is also equipped with its own `go:generate` tooling, `gdbc` entity enhancer can generate compile-time type-safe meta types to help developer write queries, it can also generate corresponding enhanced entity type for partial updates.
 
-You are not restricted to utlize generated compile-time type-safe meta types with `gdbc` built-in database accessors. You can employ them in any context where compile-time type-safe mapping is applicable. For instance, you can combine them with other Go database accessing libraries.
+You are not restricted to utlize generated compile-time type-safe meta types only with `gdbc` built-in database accessors. You can employ them in any context where compile-time type-safe mapping is applicable. For instance, you can use them with other Go database accessing libraries.
 
 ## Install
 
@@ -76,14 +76,36 @@ func (e *Person) TableColumns() *PersonTableColumns {
 
 type PersonWithUpdateTracker struct {
     Person
-    trackMap map[string]bool
+    trackMap map[string]map[string]bool
 }
 
-func (e *PersonWithUpdateTracker) ColumnsChanged() []string {
+func (e *PersonWithUpdateTracker) registerChange(tbl string, col string) {
+    if e.trackMap == nil {
+        e.trackMap = make(map[string]map[string]bool)
+    }
+
+    if m, ok := e.trackMap[tbl]; ok {
+        m[col] = true
+    } else {
+        m = make(map[string]bool)
+        e.trackMap[tbl] = m
+
+        m[col] = true
+    }
+}
+
+func (e *PersonWithUpdateTracker) ColumnsChanged(tbl ...string) []string {
     cols := []string{}
 
-    for col, _ := range e.trackMap {
-        cols = append(cols, col)
+    if tbl == nil {
+        tbl = []string{"person"}
+    }
+
+    if e.trackMap != nil {
+        m := e.trackMap[tbl[0]]
+        for col := range m {
+            cols = append(cols, col)
+        }
     }
 
     return cols
@@ -91,37 +113,19 @@ func (e *PersonWithUpdateTracker) ColumnsChanged() []string {
 
 func (e *PersonWithUpdateTracker) SetFirstName(val string) *PersonWithUpdateTracker {
     e.FirstName = val
-
-    if e.trackMap == nil {
-        e.trackMap = make(map[string]bool)
-    }
-
-    e.trackMap["first_name"] = true
-
+    e.registerChange("person", "first_name")
     return e
 }
 
 func (e *PersonWithUpdateTracker) SetLastName(val string) *PersonWithUpdateTracker {
     e.LastName = val
-
-    if e.trackMap == nil {
-        e.trackMap = make(map[string]bool)
-    }
-
-    e.trackMap["last_name"] = true
-
+    e.registerChange("person", "last_name")
     return e
 }
 
 func (e *PersonWithUpdateTracker) SetEmail(val string) *PersonWithUpdateTracker {
     e.Email = val
-
-    if e.trackMap == nil {
-        e.trackMap = make(map[string]bool)
-    }
-
-    e.trackMap["email"] = true
-
+    e.registerChange("person", "email")
     return e
 }
 ```
@@ -440,7 +444,7 @@ type Manager struct {
 
 ```go
 m4 := ManagerWithUpdateTracker{}
-m4.Id = 1000
+m4.Id = 1000 // set Id field directly to bypass update tracking
 m4.SetCompany(toPtr("bar.com"))
 m4.SetCurrentMood(toPtr("sad"))
 m4.SetTitle(toPtr("CEO"))
@@ -453,3 +457,5 @@ Be aware of restrictions in `gdbc` single inheritance support:
 
 - It is up to you to use `gdbc` implicit transaction facility to guard [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) operations that target objects across multiple database tables
 - Related Go entity types should be put within the same Go package, this is limited by current GDBC code generation tool
+- Column names in tables that are mapped to the same inheritance chain should be unique, even if they are from different underlying database tables
+- In partial update scenarios, set ID fields directly to bypass update tracking for these fields

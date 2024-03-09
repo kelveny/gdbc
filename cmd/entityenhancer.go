@@ -21,12 +21,6 @@ import (
 	"github.com/kelveny/mockcompose/pkg/gosyntax"
 )
 
-var SemVer = "v0.0.0-devel"
-
-func GetSemverInfo() string {
-	return SemVer
-}
-
 /////////////////////////////////////////////////////////////////////////////
 
 const (
@@ -529,15 +523,6 @@ func enhanceEntity(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast
 
 /////////////////////////////////////////////////////////////////////////////
 
-func usage() {
-	logger.Log(logger.PROMPT, `Usage: %s [-help] [options]
-
-entityenhancer generates entity type meta types and enhanced entity type for tracking updates.
-`, os.Args[0])
-	flag.PrintDefaults()
-	os.Exit(1)
-}
-
 func Execute() {
 	entityName := flag.String("entity", "", "name of the entity type")
 	tableName := flag.String("table", "", "name of the database table that entity type is associated")
@@ -559,7 +544,7 @@ func Execute() {
 
 	scanDir("", scanPredicate, buildEntityRegistry)
 
-	// TODO we can scan from the entity registry now
+	// TODO we can scan from the entity registry to save some time
 	scanDir("", scanPredicate, generateWithConfig(config))
 }
 

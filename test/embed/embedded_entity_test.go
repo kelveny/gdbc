@@ -32,6 +32,9 @@ func (s *AccessorEmbeddedEntityTestSuite) SetupSuite() {
 	var db *sqlx.DB
 	var err error
 
+	// prerequisite
+	// 	. have a local Postgres instance running locally at port 5432
+	//  . have a empty database named "gdbc_test" created in the Postgres instance
 	if db, err = sqlx.Open("postgres", "postgres://postgres:postgres@localhost:5432/gdbc_test?sslmode=disable"); err != nil {
 		req.FailNow("setup suite failed: %w", err)
 	}
@@ -96,7 +99,7 @@ DROP SEQUENCE IF EXISTS person_id_seq;
     `)
 }
 
-func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
+func (s *AccessorEmbeddedEntityTestSuite) TestEmbedded() {
 	req := require.New(s.T())
 
 	a := accessor.New(s.Db)
@@ -132,6 +135,38 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 	req.NoError(err)
 	req.True(m.Id == 1000)
 
+	// nested embedding
+	mp := ManagerWrapper{}
+	mp.FirstName = "foobar"
+	mp.LastName = "gdbc"
+	mp.CurrentMood = toPtr("happy")
+	mp.Company = toPtr("foo.com")
+	mp.Title = toPtr("CIO")
+	mp.Id = 1001
+
+	err = a.Create(context.Background(), &mp, "manager")
+	req.NoError(err)
+	req.True(mp.Id == 1001)
+
+	_, err = a.Delete(context.Background(), &mp, "manager")
+	req.NoError(err)
+
+	// multiple level of nested embedding
+	mpp := ManagerWrapperWrapper{}
+	mpp.FirstName = "foobar"
+	mpp.LastName = "gdbc"
+	mpp.CurrentMood = toPtr("happy")
+	mpp.Company = toPtr("foo.com")
+	mpp.Title = toPtr("CIO")
+	mpp.Id = 1002
+
+	err = a.Create(context.Background(), &mpp, "manager")
+	req.NoError(err)
+	req.True(mpp.Id == 1002)
+
+	_, err = a.Delete(context.Background(), &mpp, "manager")
+	req.NoError(err)
+
 	// Read
 	p2 := Person{}
 	p2.FirstName = "foo"
@@ -163,6 +198,30 @@ func (s *AccessorEmbeddedEntityTestSuite) TestEmbeddedGetFromBase() {
 	req.Equal("happy", *m2.CurrentMood)
 	req.Equal("foo.com", *m2.Company)
 	req.Equal("CIO", *m2.Title)
+
+	m2p := ManagerWrapper{}
+	m2p.Id = 1000
+
+	// composite entity CRUD can only be read via true ID fields
+	err = a.Read(context.Background(), &m2p, "manager")
+	req.NoError(err)
+	req.Equal("foobar", m2p.FirstName)
+	req.Equal("gdbc", m2p.LastName)
+	req.Equal("happy", *m2p.CurrentMood)
+	req.Equal("foo.com", *m2p.Company)
+	req.Equal("CIO", *m2p.Title)
+
+	m2pp := ManagerWrapperWrapper{}
+	m2pp.Id = 1000
+
+	// composite entity CRUD can only be read via true ID fields
+	err = a.Read(context.Background(), &m2pp, "manager")
+	req.NoError(err)
+	req.Equal("foobar", m2pp.FirstName)
+	req.Equal("gdbc", m2pp.LastName)
+	req.Equal("happy", *m2pp.CurrentMood)
+	req.Equal("foo.com", *m2pp.Company)
+	req.Equal("CIO", *m2pp.Title)
 
 	// Negative reads
 	p2.Id = 0
