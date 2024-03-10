@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -127,6 +129,60 @@ func (e *{{ $root.Entity }}WithUpdateTracker) Set{{ $f.Name }}(val {{ $f.TypeDec
 )
 
 /////////////////////////////////////////////////////////////////////////////
+type ModuleSpec struct {
+	RootModulePath string
+	RootDir        string
+}
+
+func getModulePath(gomodPath string) (string, error) {
+	file, err := os.Open(gomodPath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "module ") {
+			modulePath := strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			return modulePath, nil
+		}
+	}
+
+	return "", errors.New("invalid go.mod")
+}
+
+func (m *ModuleSpec) Init() error {
+	root, err := filepath.Abs("")
+	if err != nil {
+		return err
+	}
+
+	for {
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+			break
+		}
+
+		parent := filepath.Dir(root)
+		if parent == root {
+			break
+		}
+		root = parent
+	}
+
+	m.RootDir = root
+	m.RootModulePath, err = getModulePath(filepath.Join(m.RootDir, "go.mod"))
+	return err
+}
+
+func (m *ModuleSpec) ResolveModulePath(modulePath string) (string, error) {
+	if strings.HasPrefix(modulePath, m.RootModulePath) {
+		return filepath.Join(m.RootDir, strings.TrimPrefix(modulePath, m.RootModulePath)), nil
+	}
+
+	return "", errors.New("external module is not supported")
+}
 
 type EntityFieldSpec struct {
 	Name     string
@@ -140,6 +196,9 @@ type EntitySpec struct {
 	TokenFset  *token.FileSet // original token fset
 	TypeSpec   *ast.StructType
 	FieldSpecs []EntityFieldSpec
+
+	PkgHostDir string             // package full path in host in which the entity type is defined
+	Imports    []gogen.ImportSpec // imports from the file in which the entity type is defined
 }
 
 var entityRegistry map[string]*EntitySpec
@@ -149,20 +208,45 @@ func registerEntitySpec(entitySpec *EntitySpec) {
 		entityRegistry = make(map[string]*EntitySpec)
 	}
 
-	if _, ok := entityRegistry[entitySpec.Name]; !ok {
-		entityRegistry[entitySpec.Name] = entitySpec
+	key := getEntityRegistrationKey(entitySpec.PkgHostDir, entitySpec.Name)
+	if _, ok := entityRegistry[key]; !ok {
+		entityRegistry[key] = entitySpec
 	}
 }
 
-func lookupEntitySpec(entityName string) *EntitySpec {
+func lookupEntitySpec(entityHostPath string, entityName string) *EntitySpec {
 	if entityRegistry != nil {
-		return entityRegistry[entityName]
+		return entityRegistry[getEntityRegistrationKey(entityHostPath, entityName)]
 	}
 
 	return nil
 }
 
-func (es *EntitySpec) FlattenFieldSpecs(tbl string, fieldSpecs map[string][]EntityFieldSpec) (tables []string) {
+func getEntityRegistrationKey(entityHostPath string, entityName string) string {
+	return strings.Join([]string{
+		entityName,
+		entityHostPath,
+	}, "@")
+}
+
+func resolveImportHostDir(modSpec *ModuleSpec, imports []gogen.ImportSpec, alias string) (string, error) {
+	modPath := ""
+	for _, importSpec := range imports {
+		if importSpec.Name == alias || importSpec.Name == "" && filepath.Base(importSpec.Path) == alias {
+			modPath = importSpec.Path
+			break
+		}
+	}
+
+	return modSpec.ResolveModulePath(modPath)
+}
+
+func (es *EntitySpec) FlattenFieldSpecs(
+	modSpec *ModuleSpec,
+	pkgDir string,
+	tbl string,
+	fieldSpecs map[string][]EntityFieldSpec,
+) (tables []string) {
 	tables = append(tables, tbl)
 	fieldSpecs[tbl] = es.FieldSpecs
 
@@ -181,9 +265,28 @@ func (es *EntitySpec) FlattenFieldSpecs(tbl string, fieldSpecs map[string][]Enti
 								name := gosyntax.ExprDeclString(es.TokenFset, field.Type)
 								name = strings.Trim(name, "*") // remove pointer declaration from name
 
-								baseSpec := lookupEntitySpec(name)
+								tokens := strings.Split(name, ".")
+								hostDir := pkgDir
+								var err error
+								if len(tokens) > 1 {
+									name = tokens[1]
+									hostDir, err = resolveImportHostDir(modSpec, es.Imports, tokens[0])
+									if err != nil {
+										logger.Log(logger.ERROR, "Can not resolve import of package %s in %s", tokens[0], pkgDir)
+									}
+								}
+
+								baseSpec := lookupEntitySpec(hostDir, name)
+								if baseSpec == nil {
+									// perform lazy registration for cross-package code generation
+									scanDir(modSpec, hostDir, scanPredicate, buildEntityRegistry)
+								}
+
+								baseSpec = lookupEntitySpec(hostDir, name)
 								if baseSpec != nil {
-									tables = append(tables, baseSpec.FlattenFieldSpecs(tbl, fieldSpecs)...)
+									tables = append(tables, baseSpec.FlattenFieldSpecs(modSpec, baseSpec.PkgHostDir, tbl, fieldSpecs)...)
+								} else {
+									logger.Log(logger.ERROR, "Can not find entity %s in %s", name, hostDir)
 								}
 							}
 						}
@@ -234,17 +337,16 @@ func scanPredicate(fi os.FileInfo) bool {
 }
 
 func scanDir(
+	modSpec *ModuleSpec,
 	pkgDir string,
 	predicate func(fi os.FileInfo) bool,
-	do func(pkgDir string, fi os.FileInfo),
+	do func(modSpec *ModuleSpec, pkgDir string, fi os.FileInfo),
 ) error {
-	if pkgDir == "" {
-		p, err := filepath.Abs("")
-		if err != nil {
-			return err
-		}
-		pkgDir = p
+	p, err := filepath.Abs(pkgDir)
+	if err != nil {
+		return err
 	}
+	pkgDir = p
 
 	if dir, err := os.Stat(pkgDir); err == nil && dir.IsDir() {
 		fileInfos, err := ioutil.ReadDir(pkgDir)
@@ -254,14 +356,14 @@ func scanDir(
 
 		for _, fileInfo := range fileInfos {
 			if predicate(fileInfo) {
-				do(pkgDir, fileInfo)
+				do(modSpec, pkgDir, fileInfo)
 			}
 		}
 	}
 	return nil
 }
 
-func buildEntityRegistry(pkgDir string, fi os.FileInfo) {
+func buildEntityRegistry(modSpec *ModuleSpec, pkgDir string, fi os.FileInfo) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(
 		fset,
@@ -276,11 +378,11 @@ func buildEntityRegistry(pkgDir string, fi os.FileInfo) {
 		return
 	}
 
-	scanToBuildEntityRegistry(pkgDir, fi, fset, file)
+	scanToBuildEntityRegistry(modSpec, pkgDir, fi, fset, file)
 }
 
-func generateWithConfig(config *Config) func(string, os.FileInfo) {
-	return func(pkgDir string, fi os.FileInfo) {
+func generateWithConfig(config *Config) func(*ModuleSpec, string, os.FileInfo) {
+	return func(modSpec *ModuleSpec, pkgDir string, fi os.FileInfo) {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(
 			fset,
@@ -296,12 +398,18 @@ func generateWithConfig(config *Config) func(string, os.FileInfo) {
 		}
 
 		logger.Log(logger.PROMPT, "Scan %s... \n", fi.Name())
-		scanToEnhanceEntities(pkgDir, fi, fset, file, config)
+		scanToEnhanceEntities(modSpec, pkgDir, fi, fset, file, config)
 		logger.Log(logger.PROMPT, "Done entity enhancement for %s \n", fi.Name())
 	}
 }
 
-func scanToBuildEntityRegistry(_ string, _ os.FileInfo, fset *token.FileSet, file *ast.File) {
+func scanToBuildEntityRegistry(
+	_ *ModuleSpec,
+	path string,
+	_ os.FileInfo,
+	fset *token.FileSet,
+	file *ast.File,
+) {
 	for _, d := range file.Decls {
 		if gd, ok := d.(*ast.GenDecl); ok {
 			for _, spec := range gd.Specs {
@@ -313,6 +421,8 @@ func scanToBuildEntityRegistry(_ string, _ os.FileInfo, fset *token.FileSet, fil
 								TokenFset:  fset,
 								TypeSpec:   entity,
 								FieldSpecs: getEntityFields(fset, entity),
+								PkgHostDir: path,
+								Imports:    gogen.GetFileImports(file),
 							}
 
 							registerEntitySpec(&entitySpec)
@@ -324,7 +434,14 @@ func scanToBuildEntityRegistry(_ string, _ os.FileInfo, fset *token.FileSet, fil
 	}
 }
 
-func scanToEnhanceEntities(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast.File, config *Config) {
+func scanToEnhanceEntities(
+	modSpec *ModuleSpec,
+	pkgDir string,
+	fi os.FileInfo,
+	fset *token.FileSet,
+	file *ast.File,
+	config *Config,
+) {
 	for _, d := range file.Decls {
 		if gd, ok := d.(*ast.GenDecl); ok {
 			for _, spec := range gd.Specs {
@@ -333,7 +450,7 @@ func scanToEnhanceEntities(pkgDir string, fi os.FileInfo, fset *token.FileSet, f
 						option := config.GetEntityOption(tspec.Name.Name)
 
 						if option != nil {
-							enhanceEntity(pkgDir, fi, fset, file, entity, option)
+							enhanceEntity(modSpec, pkgDir, fi, fset, file, entity, option)
 						}
 					}
 				}
@@ -460,10 +577,18 @@ func generate(
 	return t.Execute(writer, binding)
 }
 
-func enhanceEntity(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast.File, entity *ast.StructType, option *Option) {
-	entitySpec := lookupEntitySpec(option.Entity)
+func enhanceEntity(
+	modSpec *ModuleSpec,
+	pkgDir string,
+	fi os.FileInfo,
+	fset *token.FileSet,
+	file *ast.File,
+	entity *ast.StructType,
+	option *Option,
+) {
+	entitySpec := lookupEntitySpec(pkgDir, option.Entity)
 	flattenFields := map[string][]EntityFieldSpec{}
-	tables := entitySpec.FlattenFieldSpecs(option.Table, flattenFields)
+	tables := entitySpec.FlattenFieldSpecs(modSpec, pkgDir, option.Table, flattenFields)
 
 	if len(flattenFields) > 0 {
 		var outputFileName string
@@ -526,12 +651,17 @@ func enhanceEntity(pkgDir string, fi os.FileInfo, fset *token.FileSet, file *ast
 func Execute() {
 	entityName := flag.String("entity", "", "name of the entity type")
 	tableName := flag.String("table", "", "name of the database table that entity type is associated")
+	path := flag.String("path", "", "path to scan")
+
 	flag.Parse()
 
 	if *entityName == "" || *tableName == "" {
 		logger.Log(logger.ERROR, "Need valid entity and table names\n")
 		os.Exit(1)
 	}
+
+	modSpec := &ModuleSpec{}
+	_ = modSpec.Init()
 
 	config := &Config{
 		Entityenhancer: []*Option{
@@ -542,10 +672,10 @@ func Execute() {
 		},
 	}
 
-	scanDir("", scanPredicate, buildEntityRegistry)
+	scanDir(modSpec, *path, scanPredicate, buildEntityRegistry)
 
 	// TODO we can scan from the entity registry to save some time
-	scanDir("", scanPredicate, generateWithConfig(config))
+	scanDir(modSpec, *path, scanPredicate, generateWithConfig(config))
 }
 
 /////////////////////////////////////////////////////////////////////////////

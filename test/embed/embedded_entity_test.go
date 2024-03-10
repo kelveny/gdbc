@@ -13,7 +13,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-type AccessorEmbeddedEntityTestSuite struct {
+type EmbeddedEntityTestSuite struct {
 	suite.Suite
 	Logger *zap.Logger
 
@@ -21,10 +21,10 @@ type AccessorEmbeddedEntityTestSuite struct {
 }
 
 func TestEmbeddedEntity(t *testing.T) {
-	suite.Run(t, new(AccessorEmbeddedEntityTestSuite))
+	suite.Run(t, new(EmbeddedEntityTestSuite))
 }
 
-func (s *AccessorEmbeddedEntityTestSuite) SetupSuite() {
+func (s *EmbeddedEntityTestSuite) SetupSuite() {
 	req := require.New(s.T())
 
 	s.Logger = zap.NewExample()
@@ -43,7 +43,7 @@ func (s *AccessorEmbeddedEntityTestSuite) SetupSuite() {
 	s.setupTestDatabase()
 }
 
-func (s *AccessorEmbeddedEntityTestSuite) TearDownSuite() {
+func (s *EmbeddedEntityTestSuite) TearDownSuite() {
 	if s.Db != nil {
 		s.teardownTestDatabase()
 
@@ -53,7 +53,7 @@ func (s *AccessorEmbeddedEntityTestSuite) TearDownSuite() {
 	}
 }
 
-func (s *AccessorEmbeddedEntityTestSuite) setupTestDatabase() {
+func (s *EmbeddedEntityTestSuite) setupTestDatabase() {
 	_ = s.Db.MustExec(`
 DROP TABLE IF EXISTS manager;
 DROP TABLE IF EXISTS employee;
@@ -89,7 +89,7 @@ ALTER TABLE manager ADD CONSTRAINT fk_manager_id FOREIGN KEY (id) REFERENCES emp
 	`)
 }
 
-func (s *AccessorEmbeddedEntityTestSuite) teardownTestDatabase() {
+func (s *EmbeddedEntityTestSuite) teardownTestDatabase() {
 	_ = s.Db.MustExec(`
 DROP TABLE IF EXISTS manager;
 DROP TABLE IF EXISTS employee;
@@ -99,7 +99,7 @@ DROP SEQUENCE IF EXISTS person_id_seq;
     `)
 }
 
-func (s *AccessorEmbeddedEntityTestSuite) TestEmbedded() {
+func (s *EmbeddedEntityTestSuite) TestEmbedded() {
 	req := require.New(s.T())
 
 	a := accessor.New(s.Db)

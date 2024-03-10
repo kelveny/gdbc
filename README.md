@@ -440,7 +440,7 @@ type Manager struct {
 }
 ```
 
-`gdbc` does not provide full [ORM](https://en.wikipedia.org/wiki/Object%E2%80%93relational_mapping#:~:text=Object%E2%80%93relational%20mapping%20(ORM%2C,from%20within%20the%20programming%20language.%22)) mapping capabilties, however, it supports [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) basics to honor single inheritance relationship of entities. This can be very handy, as you do not need to worry about manipulating among multiple tables directly, allow you to focus on your data model.
+`gdbc` does not provide full [ORM](https://en.wikipedia.org/wiki/Object%E2%80%93relational_mapping#:~:text=Object%E2%80%93relational%20mapping%20(ORM%2C,from%20within%20the%20programming%20language.%22)) mapping capabilties, however, it supports [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) basics to honor single inheritance relationship of entities. This can be very handy, as you do not need to worry about manipulating among multiple tables directly, allow you to focus on your data model. `gdbc` code generation tool also supports entity types in the same inheritance chain to reside in different package locations.
 
 ```go
 m4 := ManagerWithUpdateTracker{}
@@ -456,6 +456,5 @@ req.NoError(err)
 Be aware of restrictions in `gdbc` single inheritance support:
 
 - It is up to you to use `gdbc` implicit transaction facility to guard [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) operations that target objects across multiple database tables
-- Related Go entity types should be put within the same Go package, this is limited by current GDBC code generation tool
 - Column names in tables that are mapped to the same inheritance chain should be unique, even if they are from different underlying database tables
 - In partial update scenarios, set ID fields directly to bypass update tracking for these fields
