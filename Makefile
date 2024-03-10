@@ -4,6 +4,6 @@ build:
 
 .PHONY: release
 release:
-	rm -rf dist/
-	rm ./gdbc
+	-rm -rf dist/
+	-rm ./gdbc
 	goreleaser release
