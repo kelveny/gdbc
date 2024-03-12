@@ -690,6 +690,7 @@ func (a *Accessor) Delete(ctx context.Context, entity any, tbl string, idFields 
 	}
 
 	if len(s.BaseMappings) > 0 {
+		// perhaps we can utilize "delete cascade"
 		return a.deleteComposite(ctx, s, idFields...)
 	}
 
@@ -1006,12 +1007,17 @@ func ExecTx(
 		}
 	}()
 
-	err = execFn(ctx, New(tx))
-	if err != nil {
-		return tx.Rollback()
+	outErr = execFn(ctx, New(tx))
+	if outErr != nil {
+		err := tx.Rollback()
+		if err != nil {
+			outErr = fmt.Errorf("failed to rollback on error: %w", outErr)
+		}
 	} else {
-		return tx.Commit()
+		outErr = tx.Commit()
 	}
+
+	return
 }
 
 func entityType(typ reflect.Type) reflect.Type {
