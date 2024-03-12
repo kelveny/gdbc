@@ -2,7 +2,9 @@
 // THIS FILE SHOULD NOT BE EDITED BY HAND
 package embed
 
-import "time"
+import (
+	"time"
+)
 
 type EmployeeEntityFields struct {
 	Company string

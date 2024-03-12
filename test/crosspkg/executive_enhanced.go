@@ -2,7 +2,9 @@
 // THIS FILE SHOULD NOT BE EDITED BY HAND
 package crosspkg
 
-import "time"
+import (
+	"time"
+)
 
 type ExecutiveEntityFields struct {
 	Term string

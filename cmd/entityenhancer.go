@@ -246,9 +246,11 @@ func (es *EntitySpec) FlattenFieldSpecs(
 	pkgDir string,
 	tbl string,
 	fieldSpecs map[string][]EntityFieldSpec,
+	importSpecs map[string][]gogen.ImportSpec,
 ) (tables []string) {
 	tables = append(tables, tbl)
 	fieldSpecs[tbl] = es.FieldSpecs
+	importSpecs[tbl] = es.Imports
 
 	for _, field := range es.TypeSpec.Fields.List {
 		if field.Tag != nil {
@@ -284,7 +286,7 @@ func (es *EntitySpec) FlattenFieldSpecs(
 
 								baseSpec = lookupEntitySpec(hostDir, name)
 								if baseSpec != nil {
-									tables = append(tables, baseSpec.FlattenFieldSpecs(modSpec, baseSpec.PkgHostDir, tbl, fieldSpecs)...)
+									tables = append(tables, baseSpec.FlattenFieldSpecs(modSpec, baseSpec.PkgHostDir, tbl, fieldSpecs, importSpecs)...)
 								} else {
 									logger.Log(logger.ERROR, "Can not find entity %s in %s", name, hostDir)
 								}
@@ -518,6 +520,36 @@ func getEntityFields(fset *token.FileSet, entity *ast.StructType) []EntityFieldS
 	return fields
 }
 
+func isImportSpecInSlice(slice []gogen.ImportSpec, spec gogen.ImportSpec) bool {
+	for _, specInSlice := range slice {
+		if specInSlice.Name == spec.Name && specInSlice.Path == spec.Path {
+			return true
+		}
+	}
+
+	return false
+}
+
+func mergeBaseImports(
+	imports []gogen.ImportSpec,
+	tables []string,
+	flattenImports map[string][]gogen.ImportSpec,
+) []gogen.ImportSpec {
+	for i, tbl := range tables {
+		// process imports from base entities only
+		if i > 0 {
+			specs := flattenImports[tbl]
+			for _, specInBase := range specs {
+				if !isImportSpecInSlice(imports, specInBase) {
+					imports = append(imports, specInBase)
+				}
+			}
+		}
+	}
+
+	return imports
+}
+
 func generate(
 	writer io.Writer,
 	pkgDir string,
@@ -525,6 +557,7 @@ func generate(
 	_ *ast.StructType,
 	tables []string,
 	fields map[string][]EntityFieldSpec,
+	flattenImports map[string][]gogen.ImportSpec,
 	option *Option,
 	cleanImports bool,
 ) error {
@@ -537,6 +570,10 @@ func generate(
 	imports := gogen.GetFileImports(file)
 	if cleanImports {
 		imports = gogen.CleanImports(file, nil)
+	}
+
+	if len(tables) > 1 {
+		imports = mergeBaseImports(imports, tables, flattenImports)
 	}
 	gogen.WriteImportDecls(writer, imports)
 
@@ -588,14 +625,15 @@ func enhanceEntity(
 ) {
 	entitySpec := lookupEntitySpec(pkgDir, option.Entity)
 	flattenFields := map[string][]EntityFieldSpec{}
-	tables := entitySpec.FlattenFieldSpecs(modSpec, pkgDir, option.Table, flattenFields)
+	flattenImports := map[string][]gogen.ImportSpec{}
+	tables := entitySpec.FlattenFieldSpecs(modSpec, pkgDir, option.Table, flattenFields, flattenImports)
 
 	if len(flattenFields) > 0 {
 		var outputFileName string
 
 		// first pass to generate in memory
 		var buf bytes.Buffer
-		if err := generate(&buf, pkgDir, file, entity, tables, flattenFields, option, false); err != nil {
+		if err := generate(&buf, pkgDir, file, entity, tables, flattenFields, flattenImports, option, false); err != nil {
 			logger.Log(logger.ERROR, "Code generation error %s\n", err)
 			return
 		}
@@ -624,7 +662,7 @@ func enhanceEntity(
 			return
 		}
 
-		if err := generate(output, pkgDir, file, entity, tables, flattenFields, option, true); err != nil {
+		if err := generate(output, pkgDir, file, entity, tables, flattenFields, flattenImports, option, true); err != nil {
 			logger.Log(logger.ERROR, "Code generation error in cleaning imports%s\n", err)
 
 			output.Close()
