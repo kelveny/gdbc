@@ -113,6 +113,7 @@ func (s *CrossPackageEntityTestSuite) TestEmbedded() {
 
 	a := accessor.New(s.Db)
 
+	// test with non-zero/non-nil values
 	e := Executive{}
 	e.FirstName = "foobar"
 	e.LastName = "gdbc"
@@ -136,6 +137,39 @@ func (s *CrossPackageEntityTestSuite) TestEmbedded() {
 	req.Equal("foo.com", *e2.Company)
 	req.Equal("CIO", *e2.Title)
 	req.Equal("nonsense", *e2.Term)
+
+	// test with nil input at every level
+	e = Executive{}
+	e.FirstName = "foo"
+	e.LastName = "gdbc"
+
+	err = a.Create(context.Background(), &e, e.TableName())
+	req.NoError(err)
+	req.True(e.Id != 0)
+	req.Equal("foo", e.FirstName)
+	req.Equal("gdbc", e.LastName)
+	req.True(e.AddedAt == nil)
+	req.True(e.Age == nil)
+	req.True(e.Email == nil)
+	req.True(e.CurrentMood == nil)
+	req.True(e.Company == nil)
+	req.True(e.Title == nil)
+	req.True(e.Term == nil)
+
+	e2 = Executive{}
+	e2.Id = e.Id
+
+	_, err = a.Delete(context.Background(), &e2, e2.TableName())
+	req.NoError(err)
+	req.Equal("foo", e2.FirstName)
+	req.Equal("gdbc", e2.LastName)
+	req.True(e2.AddedAt == nil)
+	req.True(e2.Age == nil)
+	req.True(e2.Email == nil)
+	req.True(e2.CurrentMood == nil)
+	req.True(e2.Company == nil)
+	req.True(e2.Title == nil)
+	req.True(e2.Term == nil)
 }
 
 func toPtr(s string) *string {

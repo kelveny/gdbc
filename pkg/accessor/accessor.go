@@ -277,7 +277,17 @@ func (a *Accessor) Create(ctx context.Context, entity any, tbl string, idFields 
 	}
 
 	if len(s.BaseMappings) > 0 {
-		return a.createComposite(ctx, s, idFields...)
+		err = a.createComposite(ctx, s, idFields...)
+		if err == nil {
+			// Due to deep-copy operation for embedded types, we need
+			// to perform a read-back operation to reflect NULL value
+			// into nil for associated fields
+			if reflect.TypeOf(entity).Kind() == reflect.Ptr {
+				_ = a.Read(ctx, entity, tbl, idFields...)
+			}
+		}
+
+		return err
 	}
 
 	return a.create(ctx, entity, s, nil, tbl, idFields...)
