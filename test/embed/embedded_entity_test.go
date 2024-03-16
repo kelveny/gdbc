@@ -269,6 +269,70 @@ func (s *EmbeddedEntityTestSuite) TestEmbedded() {
 	req.Equal("sad", *m.CurrentMood)
 	req.Equal("CEO", *m.Title)
 
+	m4_2 := Manager2WithUpdateTracker{
+		Manager2: Manager2{
+			Employee: &Employee{},
+		},
+	}
+	m4_2.Id = 1000
+	m4_2.SetCompany(toPtr("bar2.com"))
+	m4_2.SetCurrentMood(toPtr("happy"))
+	m4_2.SetTitle(toPtr("CFO"))
+
+	_, err = a.Update(context.Background(), &m4_2, "manager")
+	req.NoError(err)
+	m = Manager{}
+	m.Id = 1000
+	err = a.Read(context.Background(), &m, "manager")
+	req.NoError(err)
+	req.Equal("bar2.com", *m.Company)
+	req.Equal("happy", *m.CurrentMood)
+	req.Equal("CFO", *m.Title)
+
+	m4_3 := Manager3WithUpdateTracker{
+		Manager3: Manager3{
+			Employee2: Employee2{
+				Person: &Person{},
+			},
+		},
+	}
+	m4_3.Id = 1000
+	m4_3.SetCompany(toPtr("bar3.com"))
+	m4_3.SetCurrentMood(toPtr("sad"))
+	m4_3.SetTitle(toPtr("COO"))
+
+	_, err = a.Update(context.Background(), &m4_3, "manager")
+	req.NoError(err)
+	m = Manager{}
+	m.Id = 1000
+	err = a.Read(context.Background(), &m, "manager")
+	req.NoError(err)
+	req.Equal("bar3.com", *m.Company)
+	req.Equal("sad", *m.CurrentMood)
+	req.Equal("COO", *m.Title)
+
+	m4_4 := Manager4WithUpdateTracker{
+		Manager4: Manager4{
+			Employee2: &Employee2{
+				Person: &Person{},
+			},
+		},
+	}
+	m4_4.Id = 1000
+	m4_4.SetCompany(toPtr("bar.com"))
+	m4_4.SetCurrentMood(toPtr("sad"))
+	m4_4.SetTitle(toPtr("CEO"))
+
+	_, err = a.Update(context.Background(), &m4_4, "manager")
+	req.NoError(err)
+	m = Manager{}
+	m.Id = 1000
+	err = a.Read(context.Background(), &m, "manager")
+	req.NoError(err)
+	req.Equal("bar.com", *m.Company)
+	req.Equal("sad", *m.CurrentMood)
+	req.Equal("CEO", *m.Title)
+
 	// delete
 	p3 := Person{}
 	p3.Id = 1
