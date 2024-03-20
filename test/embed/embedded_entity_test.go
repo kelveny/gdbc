@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Masterminds/squirrel"
 	"github.com/jmoiron/sqlx"
 	"github.com/kelveny/gdbc/pkg/accessor"
 	"github.com/stretchr/testify/require"
@@ -332,6 +333,62 @@ func (s *EmbeddedEntityTestSuite) TestEmbedded() {
 	req.Equal("bar.com", *m.Company)
 	req.Equal("sad", *m.CurrentMood)
 	req.Equal("CEO", *m.Title)
+
+	// EntityGet & EntitySelect
+	m = Manager{}
+	err = a.EntityGet(
+		context.Background(),
+		&m,
+		m.TableName(),
+		func(builder squirrel.SelectBuilder) accessor.Sqlizer {
+			return builder.Where(squirrel.Eq{
+				m.Employee.TableName() + "." + m.Employee.EntityFields().Company: "bar.com",
+			})
+		},
+	)
+	req.NoError(err)
+	req.Equal("bar.com", *m.Company)
+	req.Equal("sad", *m.CurrentMood)
+	req.Equal("CEO", *m.Title)
+	req.Equal(1000, m.Id)
+
+	mgrList := []Manager{}
+	err = a.EntitySelect(
+		context.Background(),
+		&mgrList,
+		m.TableName(),
+		func(builder squirrel.SelectBuilder) accessor.Sqlizer {
+			return builder.Where(squirrel.Eq{
+				m.Employee.TableName() + "." + m.Employee.EntityFields().Company: "bar.com",
+			})
+		},
+	)
+	req.NoError(err)
+	req.Equal(1, len(mgrList))
+
+	req.Equal("bar.com", *mgrList[0].Company)
+	req.Equal("sad", *mgrList[0].CurrentMood)
+	req.Equal("CEO", *mgrList[0].Title)
+	req.Equal(1000, mgrList[0].Id)
+
+	mgrList2 := []*Manager{}
+	err = a.EntitySelect(
+		context.Background(),
+		&mgrList2,
+		m.TableName(),
+		func(builder squirrel.SelectBuilder) accessor.Sqlizer {
+			return builder.Where(squirrel.Eq{
+				m.Employee.TableName() + "." + m.Employee.EntityFields().Company: "bar.com",
+			})
+		},
+	)
+	req.NoError(err)
+	req.Equal(1, len(mgrList2))
+
+	req.Equal("bar.com", *mgrList2[0].Company)
+	req.Equal("sad", *mgrList2[0].CurrentMood)
+	req.Equal("CEO", *mgrList2[0].Title)
+	req.Equal(1000, mgrList2[0].Id)
 
 	// delete
 	p3 := Person{}

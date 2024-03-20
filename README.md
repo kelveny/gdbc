@@ -1,6 +1,6 @@
 # GDBC - Simple Database Accessor for Go
 
-The goal of `gdbc` is not to provide yet another [ORM](https://en.wikipedia.org/wiki/Object%E2%80%93relational_mapping) solution in Go, it is to combine the power of two popular tools ([squirrel](https://github.com/Masterminds/squirrel) and [sqlx](https://github.com/jmoiron/sqlx)), give developers a simple and straight forward way of accessing database in Go. `gdbc` has following design goals:
+The goal of `gdbc` is to combine the power of two popular tools ([squirrel](https://github.com/Masterminds/squirrel) and [sqlx](https://github.com/jmoiron/sqlx)), give developers a simple and straight forward way of accessing database in Go. `gdbc` has following design goals:
 
 - Minimal pre-setup
 - Not intrusive, you don't need a framework to use it

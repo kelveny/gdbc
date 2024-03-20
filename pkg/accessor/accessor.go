@@ -9,26 +9,41 @@
 //  NamedSelect(ctx context.Context, dest any, query string, arg any) error
 //  NamedExec(ctx context.Context, query string, arg any) (sql.Result, error)
 //
-//    SqlizerGet(
-//        ctx context.Context,
-//        dest any,
-//        sqlizer func(builder squirrel.StatementBuilderType) Sqlizer,
-//    ) error
-//    SqlizerSelect(
-//        ctx context.Context,
-//        dest any,
-//        sqlizer func(builder squirrel.StatementBuilderType) Sqlizer,
-//    ) error
-//    SqlizerExec(
-//        ctx context.Context,
-//        sqlizer func(builder squirrel.StatementBuilderType) Sqlizer,
-//    ) (result sql.Result, outErr error)
+//  SqlizerGet(
+//    ctx context.Context,
+//    dest any,
+//    sqlizer func(builder squirrel.StatementBuilderType) Sqlizer,
+//  ) error
+//  SqlizerSelect(
+//    ctx context.Context,
+//    dest any,
+//    sqlizer func(builder squirrel.StatementBuilderType) Sqlizer,
+//  ) error
+//  SqlizerExec(
+//    ctx context.Context,
+//    sqlizer func(builder squirrel.StatementBuilderType) Sqlizer,
+//  ) (result sql.Result, outErr error)
 //
 //  // Entity CRUD
-//    Create(ctx context.Context, entity any, tbl string, idFields ...string) error
+//  Create(ctx context.Context, entity any, tbl string, idFields ...string) error
 //  Read(ctx context.Context, entity any, tbl string, idFields ...string) error
-//    Update(ctx context.Context, entity any, tbl string, idFields ...string) (sql.Result, error)
+//  Update(ctx context.Context, entity any, tbl string, idFields ...string) (sql.Result, error)
 //  Delete(ctx context.Context, entity any, tbl string, idFields ...string) (sql.Result, error)
+//
+//  EntityGet(
+//    ctx context.Context,
+//    dest any,
+//    tbl string,
+//    sqlizer func(builder squirrel.SelectBuilder) Sqlizer,
+//    idFields ...string,
+//  ) error
+//  EntitySelect(
+//    ctx context.Context,
+//    dest any,
+//    tbl string,
+//    sqlizer func(builder squirrel.SelectBuilder) Sqlizer,
+//    idFields ...string,
+//  ) error
 //
 // 2. public helper functions
 //    ExecTx(
@@ -979,6 +994,159 @@ func (a *Accessor) SqlizerExec(
 	}
 
 	return a.Exec(ctx, a.Db.Rebind(q), args...)
+}
+
+// For composite entity type, EntityGet can help generate SQL table JOIN statement,
+// let you focus on writing the right WHERE clause
+//
+// Usage example:
+/*
+	m = Manager{}
+	err = a.EntityGet(
+		context.Background(),
+		&m,
+		m.TableName(),
+		func(builder squirrel.SelectBuilder) accessor.Sqlizer {
+			return builder.Where(squirrel.Eq{
+				m.Employee.TableName() + "." + m.Employee.EntityFields().Company: "bar.com",
+			})
+		},
+	)
+*/
+func (a *Accessor) EntityGet(
+	ctx context.Context,
+	dest any,
+	tbl string,
+	sqlizer func(builder squirrel.SelectBuilder) Sqlizer,
+	idFields ...string,
+) error {
+	if reflect.TypeOf(dest).Kind() != reflect.Pointer {
+		return errors.New("expecting dest type to be pointer type of the entity")
+	}
+
+	s, err := EntitySchema(dest, reflect.TypeOf(dest), tbl)
+	if err != nil {
+		return err
+	}
+
+	if len(s.BaseMappings) > 0 {
+		if len(idFields) == 0 {
+			idFields = []string{"Id"}
+		}
+
+		idColumns, _, err := a.getMapping(s.Entity, idFields...)
+		if err != nil {
+			return err
+		}
+
+		tables := s.Tables()
+		builder := squirrel.StatementBuilder.
+			Select(s.GetColumnSelectString()).
+			From(tables[0]).
+			Join(s.GetTableJoinString(idColumns...))
+
+		q, args, err := sqlizer(builder).ToSql()
+
+		if err != nil {
+			return err
+		}
+
+		return a.Get(ctx, dest, a.Db.Rebind(q), args...)
+	}
+
+	builder := squirrel.StatementBuilder.
+		Select(s.GetColumnSelectString()).
+		From(tbl)
+
+	q, args, err := sqlizer(builder).ToSql()
+	if err != nil {
+		return err
+	}
+
+	return a.Get(ctx, dest, a.Db.Rebind(q), args...)
+}
+
+// For composite entity type, EntitySelect can help generate SQL table JOIN statement,
+// let you focus on writing the right WHERE clause
+// Usage example:
+/*
+	mgrList := []Manager{}
+	err = a.EntitySelect(
+		context.Background(),
+		&mgrList,
+		m.TableName(),
+		func(builder squirrel.SelectBuilder) accessor.Sqlizer {
+			return builder.Where(squirrel.Eq{
+				m.Employee.TableName() + "." + m.Employee.EntityFields().Company: "bar.com",
+			})
+		},
+	)
+*/
+func (a *Accessor) EntitySelect(
+	ctx context.Context,
+	dest any,
+	tbl string,
+	sqlizer func(builder squirrel.SelectBuilder) Sqlizer,
+	idFields ...string,
+) error {
+	value := reflect.ValueOf(dest)
+
+	if value.Kind() != reflect.Ptr {
+		return errors.New("must pass a pointer, not a value, to StructScan destination")
+	}
+	if value.IsNil() {
+		return errors.New("nil pointer passed to StructScan destination")
+	}
+	value = reflect.Indirect(value)
+
+	slice, err := baseType(value.Type(), reflect.Slice)
+	if err != nil {
+		return err
+	}
+	value.SetLen(0)
+	base := reflectx.Deref(slice.Elem())
+
+	s, err := EntitySchema(reflect.New(base).Interface(), base, tbl)
+	if err != nil {
+		return err
+	}
+
+	if len(s.BaseMappings) > 0 {
+		if len(idFields) == 0 {
+			idFields = []string{"Id"}
+		}
+
+		idColumns, _, err := a.getMapping(s.Entity, idFields...)
+		if err != nil {
+			return err
+		}
+
+		tables := s.Tables()
+		builder := squirrel.StatementBuilder.
+			Select(s.GetColumnSelectString()).
+			From(tables[0]).
+			Join(s.GetTableJoinString(idColumns...))
+
+		q, args, err := sqlizer(builder).ToSql()
+
+		if err != nil {
+			return err
+		}
+
+		return a.Select(ctx, dest, a.Db.Rebind(q), args...)
+	}
+
+	builder := squirrel.StatementBuilder.
+		Select(s.GetColumnSelectString()).
+		From(tbl)
+
+	q, args, err := sqlizer(builder).ToSql()
+
+	if err != nil {
+		return err
+	}
+
+	return a.Select(ctx, dest, a.Db.Rebind(q), args...)
 }
 
 // ExecTx uses annonymous execution function to achieve crash-safe and implicit transaction commission effect
